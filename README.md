@@ -197,6 +197,18 @@ AstrBot 会读取插件根目录的 `_conf_schema.json` 并生成插件配置。
 
 导出的 Persona Prompt 会内置“外部记忆与原文依据使用规则”：运行时如果 Memorix、Knowledge Base、证据卡或 `/distill recall` 原文片段进入上下文，角色应优先依据这些内容回答；没有原文依据时，只能按人格设定做保守概括，不能把 Persona 本身当作原文事实来源。
 
+### Persona 与 Memorix 的关系
+
+Persona 不会自己主动去查询 Memorix。AstrBot 运行时是否能“读到” Memorix，取决于 Memorix 插件是否已安装、启用，并在当前作用域里完成了记忆注入。
+
+这套插件当前的职责分工是：
+
+- `Memorix` 负责把会话记忆、人物画像和导入内容注入到运行时上下文。
+- `Character Distiller` 负责把蒸馏结果写入 `Memorix`，并在导出的 Persona Prompt 里加入“优先使用外部记忆和原文依据”的约束。
+- `Persona` 负责按已经注入的上下文进行角色扮演，不承担自己去检索外部记忆的职责。
+
+所以，实际效果是“Memorix 先注入，Persona 再消费”。如果没有 Memorix，Persona 仍然能用，只是只能依赖它自身的 Prompt 和写入时带进去的内容。
+
 写入 Knowledge Base：
 
 ```text
@@ -238,6 +250,7 @@ works/<work_id>/rag_export/memorix_import/<角色>/mrx_<work_id>_<hash>.json
 - Knowledge Base 写入会调用 Embedding Provider 生成向量，可能产生模型调用成本。
 - Memorix 直接写入依赖 Memorix 插件已在 AstrBot 中加载；没有加载时会退回到导入 JSON。
 - Angel Memory 目前仍以 JSON 导出文件形式提供，建议在对应插件中导入 `exports/` 下的 JSON。
+- Persona 不会自动查询 Memorix；如果你希望它在回答细节时优先依赖记忆，必须让 Memorix 先把内容注入上下文，并使用本插件导出的 Persona Prompt 规则。
 - HAPI 出现不明命令，例如 `command=a`，不要批准。应使用上面的 `/distill apply ...` 显式命令。
 
 ### 原文长记忆与回忆细节
