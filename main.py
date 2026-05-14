@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 from pathlib import Path
@@ -578,7 +579,8 @@ class CharacterDistillerPlugin(Star):
         char_file = safe_filename(character)
         target_dir = base / "rag_export" / "memorix_import" / char_file
         target_dir.mkdir(parents=True, exist_ok=True)
-        path = target_dir / f"memorix_import_{char_file}_{work_id}.json"
+        character_digest = hashlib.sha1(character.encode("utf-8")).hexdigest()[:8]
+        path = target_dir / f"mrx_{work_id}_{character_digest}.json"
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         return path
 
