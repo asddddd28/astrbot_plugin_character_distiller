@@ -22,7 +22,7 @@ PLUGIN_NAME = "astrbot_plugin_character_distiller"
     PLUGIN_NAME,
     "asddd",
     "角色动态人格蒸馏器：导入文本、生成证据卡、人格 Prompt、语言指纹和记忆导出。",
-    "0.6.0",
+    "0.6.1",
 )
 class CharacterDistillerPlugin(Star):
     def __init__(self, context: Context, config=None):

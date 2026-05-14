@@ -195,6 +195,8 @@ AstrBot 会读取插件根目录的 `_conf_schema.json` 并生成插件配置。
 世凪_post_end
 ```
 
+导出的 Persona Prompt 会内置“外部记忆与原文依据使用规则”：运行时如果 Memorix、Knowledge Base、证据卡或 `/distill recall` 原文片段进入上下文，角色应优先依据这些内容回答；没有原文依据时，只能按人格设定做保守概括，不能把 Persona 本身当作原文事实来源。
+
 写入 Knowledge Base：
 
 ```text
@@ -374,6 +376,7 @@ repo: https://github.com/asddddd28/astrbot_plugin_character_distiller
 
 ## 版本
 
+- `v0.6.1`：Persona Prompt 导出新增外部记忆与原文依据使用规则，约束角色优先使用 Memorix、Knowledge Base、证据卡和 recall 片段。
 - `v0.6.0`：新增 `/distill recall`，支持从蒸馏产物定位并回读原文段落上下文，形成 Memorix 长期记忆与原文档案分层编排。
 - `v0.5.0`：新增 `/distill apply memorix`，支持直接写入已加载的 Memorix 当前作用域，并提供导入 JSON 降级路径。
 - `v0.4.0`：新增 `/distill apply`，支持把导出结果写入 AstrBot Persona 和 Knowledge Base。
