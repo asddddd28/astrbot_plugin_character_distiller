@@ -529,6 +529,39 @@ class CharacterDistillerPlugin(Star):
                 }
             )
 
+        if self._memorix_payload_mode() == "rich":
+            timeline_path = base / "distilled" / f"timeline_persona_{char_file}.json"
+            if timeline_path.exists():
+                timeline = json.loads(timeline_path.read_text(encoding="utf-8"))
+                paragraphs.append(
+                    {
+                        "content": "[角色时间线人格]\n" + json.dumps(timeline, ensure_ascii=False, indent=2),
+                        "source": f"{source}:timeline",
+                        "knowledge_type": knowledge_type,
+                    }
+                )
+
+            prompt_dir = base / "exports"
+            for path in sorted(prompt_dir.glob(f"astrbot_persona_prompt_{char_file}_*.txt")):
+                phase = path.stem.replace(f"astrbot_persona_prompt_{char_file}_", "", 1)
+                paragraphs.append(
+                    {
+                        "content": "[AstrBot Persona Prompt]\n" + path.read_text(encoding="utf-8"),
+                        "source": f"{source}:persona_prompt:{phase}",
+                        "knowledge_type": knowledge_type,
+                    }
+                )
+
+            kb_chunks_dir = base / "rag_export" / "kb_chunks" / char_file
+            for path in sorted(kb_chunks_dir.glob("*.md")) if kb_chunks_dir.exists() else []:
+                paragraphs.append(
+                    {
+                        "content": "[KB检索块]\n" + path.read_text(encoding="utf-8"),
+                        "source": f"{source}:kb_chunk:{path.stem}",
+                        "knowledge_type": knowledge_type,
+                    }
+                )
+
         if not paragraphs:
             self.pipeline.export_package(work_id, character)
             memorix_paths = sorted((base / "exports").glob(f"memorix_export_{char_file}_*.json"))
@@ -646,6 +679,10 @@ class CharacterDistillerPlugin(Star):
 
     def _memorix_knowledge_type(self) -> str:
         return str(self.config.get("application", {}).get("memorix_knowledge_type", "structured"))
+
+    def _memorix_payload_mode(self) -> str:
+        mode = str(self.config.get("application", {}).get("memorix_payload_mode", "rich")).strip().lower()
+        return mode if mode in {"compact", "rich"} else "rich"
 
     async def _llm_generate(self, event: AstrMessageEvent):
         if not self.config.get("provider", {}).get("enable_ai_distillation", True):

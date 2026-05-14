@@ -80,6 +80,11 @@
         "description": "写入 Memorix 时使用的 knowledge_type，可选 auto/factual/narrative/structured/mixed；角色蒸馏结果建议 structured。",
         "type": "string",
         "default": "structured"
+      },
+      "memorix_payload_mode": {
+        "description": "写入 Memorix 的内容规模：compact 仅写入人格/知识/证据/语言指纹；rich 额外写入时间线、Persona Prompt 和 KB 检索块。",
+        "type": "string",
+        "default": "rich"
       }
     }
   },
