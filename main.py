@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
+import sys
 from pathlib import Path
 
 from astrbot.api import logger
@@ -453,7 +454,7 @@ class CharacterDistillerPlugin(Star):
                 scope_key = getattr(event, "unified_msg_origin", "") or "default"
 
             runtime = await runtime_manager.get_runtime(scope_key)
-            import_service_cls = self._memorix_import_service_class()
+            import_service_cls = self._memorix_import_service_class(memorix)
             result = await import_service_cls(runtime.context).import_json(payload)
         except Exception as exc:
             logger.warning("memorix direct write failed: %s", exc, exc_info=True)
@@ -597,14 +598,36 @@ class CharacterDistillerPlugin(Star):
                 return getattr(meta, "star_cls", None)
         return None
 
-    def _memorix_import_service_class(self):
-        try:
-            module = importlib.import_module(
-                "astrbot_plugin_memorix.memorix.amemorix.services.import_service"
-            )
-        except ModuleNotFoundError:
-            module = importlib.import_module("memorix.amemorix.services.import_service")
-        return module.ImportService
+    def _memorix_import_service_class(self, memorix_plugin):
+        module_name = str(getattr(memorix_plugin.__class__, "__module__", ""))
+        plugin_module = sys.modules.get(module_name)
+        plugin_file = Path(str(getattr(plugin_module, "__file__", ""))) if plugin_module else None
+        plugin_dir = plugin_file.parent if plugin_file and str(plugin_file) else None
+        if plugin_dir and plugin_dir.exists():
+            for path in (plugin_dir, plugin_dir.parent):
+                text = str(path)
+                if text not in sys.path:
+                    sys.path.insert(0, text)
+
+        candidates = []
+        if module_name and "." in module_name:
+            root_package = module_name.rsplit(".", 1)[0]
+            candidates.append(f"{root_package}.memorix.amemorix.services.import_service")
+        candidates.extend(
+            [
+                "astrbot_plugin_memorix.memorix.amemorix.services.import_service",
+                "memorix.amemorix.services.import_service",
+            ]
+        )
+
+        errors = []
+        for candidate in dict.fromkeys(candidates):
+            try:
+                module = importlib.import_module(candidate)
+                return module.ImportService
+            except ModuleNotFoundError as exc:
+                errors.append(f"{candidate}: {exc}")
+        raise ModuleNotFoundError("无法导入 Memorix ImportService；尝试路径：" + " | ".join(errors))
 
     def _persona_skills(self) -> list[str] | None:
         value = self.config.get("application", {}).get(
