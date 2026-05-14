@@ -5,6 +5,7 @@ from pathlib import Path
 from .extractors import EvidenceExtractor, PersonaExtractor, SpeechExtractor
 from .ai_distiller import AIDistiller, LLMGenerate
 from .importer import TextImporter
+from .result_importer import DistilledResultImporter
 from .splitter import TextSplitter
 from .utils import safe_filename
 from ..rag.exporters import RagExporter
@@ -18,6 +19,7 @@ class CharacterDistillerPipeline:
         self.importer = TextImporter(workspace)
         self.splitter = TextSplitter()
         self.evidence_extractor = EvidenceExtractor()
+        self.result_importer = DistilledResultImporter(workspace)
         self.persona_extractor = PersonaExtractor()
         self.speech_extractor = SpeechExtractor()
         self.persona_writer = PersonaWriter()
@@ -135,6 +137,72 @@ class CharacterDistillerPipeline:
 
         return "导出完成：\n" + "\n".join(str(path) for path in outputs)
 
+    def import_result(self, work_id: str, json_path: Path, auto_export: bool = True) -> str:
+        summary = self.result_importer.import_result(work_id, json_path)
+        lines = [
+            "外部蒸馏结果导入完成：",
+            f"work_id：{summary['work_id']}",
+            f"角色：{summary['character']}",
+            f"证据卡：{summary['evidence_count']}",
+            f"人格卡：{summary['persona_count']}",
+            f"知识卡：{summary['knowledge_count']}",
+            f"语言指纹：{'有' if summary['has_style'] else '无'}",
+            f"证据审核：{'有' if summary['has_review'] else '无'}",
+        ]
+        if auto_export:
+            lines.extend(["", self.export_package(summary["work_id"], summary["character"])])
+        return "\n".join(lines)
+
+    def export_package(self, work_id: str, character: str) -> str:
+        base = self.workspace.require_work_dir(work_id)
+        char_file = safe_filename(character)
+        persona_paths = sorted((base / "distilled").glob(f"persona_card_{char_file}_*.json"))
+        if not persona_paths:
+            raise RuntimeError("尚未找到人格卡，请先执行 /distill persona build 或 /distill import-result")
+
+        speech = self._load_or_build_style(work_id, character)
+        outputs = []
+        for persona_path in persona_paths:
+            persona = self.workspace.read_json(persona_path, {})
+            phase_file = safe_filename(persona.get("phase", "auto"))
+
+            prompt = self.persona_writer.build_prompt(persona, speech)
+            prompt_out = base / "exports" / f"astrbot_persona_prompt_{char_file}_{phase_file}.txt"
+            prompt_out.write_text(prompt, encoding="utf-8")
+            outputs.append(prompt_out)
+
+            memorix_out = base / "exports" / f"memorix_export_{char_file}_{phase_file}.json"
+            self.workspace.write_json(memorix_out, self.rag_exporter.memorix_rows(persona))
+            outputs.append(memorix_out)
+
+            angel_out = base / "exports" / f"angel_memory_export_{char_file}_{phase_file}.json"
+            self.workspace.write_json(angel_out, self.rag_exporter.angel_rows(persona))
+            outputs.append(angel_out)
+
+        evidence_cards = self._load_evidence(work_id, character)
+        kb_dir = base / "rag_export" / "kb_chunks" / char_file
+        kb_dir.mkdir(parents=True, exist_ok=True)
+        for card in evidence_cards:
+            (kb_dir / f"{card['evidence_id']}.md").write_text(
+                self.rag_exporter.kb_markdown(card),
+                encoding="utf-8",
+            )
+        outputs.append(kb_dir)
+
+        knowledge_rows = self.workspace.read_jsonl(base / "distilled" / f"knowledge_cards_{char_file}.jsonl")
+        if knowledge_rows:
+            knowledge_dir = base / "rag_export" / "knowledge_cards" / char_file
+            knowledge_dir.mkdir(parents=True, exist_ok=True)
+            for row in knowledge_rows:
+                kid = safe_filename(row.get("knowledge_id", row.get("type", "knowledge")))
+                (knowledge_dir / f"{kid}.md").write_text(
+                    self._knowledge_markdown(row),
+                    encoding="utf-8",
+                )
+            outputs.append(knowledge_dir)
+
+        return "完整导出包生成完成：\n" + "\n".join(str(path) for path in outputs)
+
     def run_mvp(self, work_id: str, character: str, phase: str = "auto") -> str:
         parts = [
             self.build_evidence(work_id, character),
@@ -150,12 +218,13 @@ class CharacterDistillerPipeline:
         character: str,
         llm_generate: LLMGenerate,
         max_evidence: int = 48,
+        detail_level: str = "3_balanced",
     ) -> str:
         base = self.workspace.require_work_dir(work_id)
         paragraphs = self.workspace.read_jsonl(base / "index" / "paragraphs.jsonl")
         if not paragraphs:
             raise RuntimeError("尚未切分文本，请先执行 /distill split")
-        cards = await AIDistiller(llm_generate, max_evidence).build_evidence(
+        cards = await AIDistiller(llm_generate, max_evidence, detail_level).build_evidence(
             work_id,
             character,
             paragraphs,
@@ -174,14 +243,15 @@ class CharacterDistillerPipeline:
         phase: str,
         llm_generate: LLMGenerate,
         max_evidence: int = 48,
+        detail_level: str = "3_balanced",
     ) -> str:
         cards = self._load_evidence(work_id, character)
         if not cards:
-            await self.build_evidence_ai(work_id, character, llm_generate, max_evidence)
+            await self.build_evidence_ai(work_id, character, llm_generate, max_evidence, detail_level)
             cards = self._load_evidence(work_id, character)
         if not cards:
             raise RuntimeError("尚未生成证据卡，请先执行 /distill evidence build")
-        persona = await AIDistiller(llm_generate, max_evidence).build_persona(
+        persona = await AIDistiller(llm_generate, max_evidence, detail_level).build_persona(
             work_id,
             character,
             cards,
@@ -205,13 +275,14 @@ class CharacterDistillerPipeline:
         character: str,
         llm_generate: LLMGenerate,
         max_evidence: int = 48,
+        detail_level: str = "3_balanced",
     ) -> str:
         base = self.workspace.require_work_dir(work_id)
         paragraphs = self.workspace.read_jsonl(base / "index" / "paragraphs.jsonl")
         utterances = self.workspace.read_jsonl(base / "index" / "utterances.jsonl")
         if not paragraphs:
             raise RuntimeError("尚未切分文本，请先执行 /distill split")
-        speech = await AIDistiller(llm_generate, max_evidence).build_style(
+        speech = await AIDistiller(llm_generate, max_evidence, detail_level).build_style(
             work_id,
             character,
             paragraphs,
@@ -233,11 +304,12 @@ class CharacterDistillerPipeline:
         phase: str,
         llm_generate: LLMGenerate,
         max_evidence: int = 48,
+        detail_level: str = "3_balanced",
     ) -> str:
         parts = [
-            await self.build_evidence_ai(work_id, character, llm_generate, max_evidence),
-            await self.build_persona_ai(work_id, character, phase, llm_generate, max_evidence),
-            await self.build_style_ai(work_id, character, llm_generate, max_evidence),
+            await self.build_evidence_ai(work_id, character, llm_generate, max_evidence, detail_level),
+            await self.build_persona_ai(work_id, character, phase, llm_generate, max_evidence, detail_level),
+            await self.build_style_ai(work_id, character, llm_generate, max_evidence, detail_level),
             self.export(work_id, character, "all", phase),
         ]
         return "\n\n".join(parts)
@@ -306,3 +378,20 @@ class CharacterDistillerPipeline:
         if path.exists():
             return self.workspace.read_json(path, {})
         return self._build_style_obj(work_id, character)
+
+    @staticmethod
+    def _knowledge_markdown(row: dict) -> str:
+        tags = ", ".join(row.get("tags", []))
+        evidence_ids = ", ".join(row.get("source_evidence_ids", []))
+        return (
+            f"# knowledge_id: {row.get('knowledge_id', '')}\n\n"
+            "metadata:\n"
+            f"- work_id: {row.get('work_id', '')}\n"
+            f"- character: {row.get('character', '')}\n"
+            f"- type: {row.get('type', '')}\n"
+            f"- certainty: {row.get('certainty', '')}\n"
+            f"- source_evidence_ids: {evidence_ids}\n"
+            f"- tags: {tags}\n\n"
+            "## 知识\n"
+            f"{row.get('knowledge', '')}\n"
+        )

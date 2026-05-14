@@ -22,7 +22,8 @@
   - Knowledge Base Markdown chunks
   - Memorix JSON
   - Angel Memory JSON
-- 内置 4 个辅助 Skills，用于证据审阅、人格蒸馏、语言指纹和知识卡抽取。
+- 支持导入外部 AI/Agent 生成的完整蒸馏 JSON，并自动转换成插件标准产物。
+- 内置 5 个辅助 Skills，用于证据审阅、人格蒸馏、语言指纹、知识卡抽取和导出编排。
 
 ## 安装
 
@@ -67,7 +68,21 @@ AstrBot 会读取插件根目录的 `_conf_schema.json` 并生成插件配置。
 | `min_evidence_count` | `3` | 人格规则建议的最少证据数。 |
 | `min_confidence` | `0.75` | 写入人格时建议的最低置信度。 |
 | `enable_counter_evidence_check` | `true` | 保留反证检查策略开关。 |
-| `ai_max_evidence` | `48` | 每次 AI 提取/蒸馏最多送入模型的候选证据段落数。 |
+| `detail_level` | `"3_balanced"` | AI 蒸馏精细程度，见下方 6 档说明。 |
+| `ai_max_evidence` | `0` | 高级覆盖项。填 `0` 时按 `detail_level` 自动选择候选证据段落数。 |
+
+### 蒸馏精细度
+
+| 等级 | 配置值 | 默认候选证据数 | 适用场景 |
+| --- | --- | ---: | --- |
+| 1 | `1_quick` | 12 | 快速试跑，只看流程是否通。 |
+| 2 | `2_light` | 24 | 轻量蒸馏，提取主线人格和少量核心证据。 |
+| 3 | `3_balanced` | 48 | 均衡蒸馏，当前默认等级，适合常规角色卡生成。 |
+| 4 | `4_deep` | 80 | 深度蒸馏，加强阶段差异、触发条件、关系变化和反证。 |
+| 5 | `5_canonical` | 120 | 高保真蒸馏，适合准备写入长期 Persona/Memory 前的正式版本。 |
+| 6 | `6_exhaustive` | 180 | 穷尽式蒸馏，成本最高，适合最终归档或核心角色。 |
+
+你现在看到的 `yonagi_distilled.json` 这类结果，大致接近 **3_balanced 到 4_deep** 之间：阶段弧线完整，但证据卡数量仍保持克制，没有对全部 1187 次出场做穷尽式逐条建模。
 
 ### rag
 
@@ -84,10 +99,12 @@ AstrBot 会读取插件根目录的 `_conf_schema.json` 并生成插件配置。
 /distill status [work_id]
 /distill import <作品名> <txt或md文件路径>
 /distill split <work_id>
+/distill import-result <work_id|new> <json路径> [yes|no]
 /distill evidence build <角色名> <work_id>
 /distill persona build <角色名> <work_id> [phase|auto]
 /distill style build <角色名> <work_id>
 /distill export <persona|memorix|angel|kb|all> <角色名> <work_id> [phase|auto]
+/distill export-package <角色名> <work_id>
 /distill run <角色名> <work_id> [phase|auto]
 ```
 
@@ -95,6 +112,8 @@ AstrBot 会读取插件根目录的 `_conf_schema.json` 并生成插件配置。
 
 - `phase` 可填 `early`、`middle`、`late` 或 `auto`。
 - `run` 会依次执行 evidence、persona、style、export all。
+- `import-result` 会导入外部蒸馏 JSON，例如 Agent 生成的 `yonagi_distilled.json`。
+- `export-package` 会对所有阶段人格卡生成完整 Persona/KB/Memorix/Angel 导出包。
 - 在 AI 蒸馏模式下，`evidence`、`persona`、`style`、`run` 会调用 AstrBot LLM Provider。
 - 在没有可用 Provider 时，插件会回退到规则模式。
 
@@ -110,6 +129,26 @@ AstrBot 会读取插件根目录的 `_conf_schema.json` 并生成插件配置。
 ```
 
 如果导入返回的 `work_id` 不是 `work_001`，后续命令请使用实际返回的编号。
+
+### 导入外部蒸馏结果
+
+如果 AI/Agent 已经生成类似 `yonagi_distilled.json` 的完整结果，可以直接导入插件标准目录并自动导出：
+
+```text
+/distill import-result new "C:/path/to/yonagi_distilled.json" yes
+```
+
+导入到已有 work 但暂不导出：
+
+```text
+/distill import-result work_003 "C:/path/to/yonagi_distilled.json" no
+```
+
+重新生成完整导出包：
+
+```text
+/distill export-package 世凪 work_003
+```
 
 成功使用 AI 蒸馏时，响应中会出现类似：
 
@@ -177,6 +216,7 @@ works/work_001/
 ```text
 skills/
 ├── evidence-reviewer/
+├── export-packager/
 ├── knowledge-distiller/
 ├── persona-distiller/
 └── style-fingerprint/
@@ -192,6 +232,7 @@ skills/
 | `persona-distiller` | 从证据卡构建阶段人格卡，要求引用 `evidence_id` 并输出防跑偏规则。 |
 | `style-fingerprint` | 提取角色语言指纹，包括句长、语气、称呼、标点、情绪下的表达变化。 |
 | `knowledge-distiller` | 从剧情和设定中提取短知识卡，区分事实、推测、传闻和角色视角。 |
+| `export-packager` | 将外部蒸馏 JSON 转成标准产物，并编排 Persona/KB/Memorix/Angel 完整导出。 |
 
 ## 当前边界
 
@@ -227,5 +268,6 @@ repo: https://github.com/asddddd28/astrbot_plugin_character_distiller
 
 ## 版本
 
+- `v0.3.0`：新增外部蒸馏 JSON 导入、完整导出包、导出编排 Skill，以及 1-6 级蒸馏精细度设置。
 - `v0.2.0`：接入 AstrBot LLM Provider，支持 AI 证据提取、人格蒸馏和语言指纹分析；修复中文旧编码导入；补充插件更新元数据。
 - `v0.1.0`：规则型 MVP，支持导入、切分、证据卡、人格卡、语言指纹和导出。

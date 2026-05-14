@@ -17,7 +17,7 @@ PLUGIN_NAME = "astrbot_plugin_character_distiller"
     PLUGIN_NAME,
     "asddd",
     "角色动态人格蒸馏器：导入文本、生成证据卡、人格 Prompt、语言指纹和记忆导出。",
-    "0.2.0",
+    "0.3.0",
 )
 class CharacterDistillerPlugin(Star):
     def __init__(self, context: Context, config=None):
@@ -89,6 +89,37 @@ class CharacterDistillerPlugin(Star):
         event.set_result(MessageEventResult().message(result))
 
     @filter.permission_type(filter.PermissionType.ADMIN)
+    @distill.command("import-result")
+    async def import_result(
+        self,
+        event: AstrMessageEvent,
+        work_id: str = "",
+        json_path: str = "",
+        auto_export: str = "yes",
+    ):
+        """导入外部蒸馏 JSON：/distill import-result new C:\\path\\yonagi_distilled.json [yes|no]"""
+        if not work_id or not json_path:
+            event.set_result(
+                MessageEventResult().message(
+                    "用法：/distill import-result <work_id|new> <json路径> [yes|no]\n"
+                    "yes 表示导入后自动生成 Persona/KB/Memorix/Angel 导出包。"
+                )
+            )
+            return
+        try:
+            clean_path = json_path.strip().strip("\"'“”‘’")
+            result = self.pipeline.import_result(
+                work_id=work_id,
+                json_path=Path(clean_path),
+                auto_export=auto_export.lower() not in {"no", "false", "0"},
+            )
+        except Exception as exc:
+            logger.error("distill import-result failed: %s", exc, exc_info=True)
+            event.set_result(MessageEventResult().message(f"外部蒸馏结果导入失败：{exc}"))
+            return
+        event.set_result(MessageEventResult().message(result))
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
     @distill.command("evidence")
     async def evidence(self, event: AstrMessageEvent, action: str = "", character: str = "", work_id: str = ""):
         """生成证据卡：/distill evidence build 角色A work_001"""
@@ -105,6 +136,7 @@ class CharacterDistillerPlugin(Star):
                     character=character,
                     llm_generate=llm_generate,
                     max_evidence=self._max_evidence(),
+                    detail_level=self._detail_level(),
                 )
             else:
                 result = self.pipeline.build_evidence(work_id=work_id, character=character)
@@ -132,6 +164,7 @@ class CharacterDistillerPlugin(Star):
                     phase=phase,
                     llm_generate=llm_generate,
                     max_evidence=self._max_evidence(),
+                    detail_level=self._detail_level(),
                 )
             else:
                 result = self.pipeline.build_persona(work_id=work_id, character=character, phase=phase)
@@ -158,6 +191,7 @@ class CharacterDistillerPlugin(Star):
                     character=character,
                     llm_generate=llm_generate,
                     max_evidence=self._max_evidence(),
+                    detail_level=self._detail_level(),
                 )
             else:
                 result = self.pipeline.build_style(work_id=work_id, character=character)
@@ -187,6 +221,21 @@ class CharacterDistillerPlugin(Star):
         event.set_result(MessageEventResult().message(result))
 
     @filter.permission_type(filter.PermissionType.ADMIN)
+    @distill.command("export-package")
+    async def export_package(self, event: AstrMessageEvent, character: str = "", work_id: str = ""):
+        """导出完整包：/distill export-package 角色A work_001"""
+        if not character or not work_id:
+            event.set_result(MessageEventResult().message("用法：/distill export-package <角色名> <work_id>"))
+            return
+        try:
+            result = self.pipeline.export_package(work_id=work_id, character=character)
+        except Exception as exc:
+            logger.error("distill export-package failed: %s", exc, exc_info=True)
+            event.set_result(MessageEventResult().message(f"完整导出包生成失败：{exc}"))
+            return
+        event.set_result(MessageEventResult().message(result))
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
     @distill.command("run")
     async def run_all(self, event: AstrMessageEvent, character: str = "", work_id: str = "", phase: str = "auto"):
         """跑通 MVP 流程：/distill run 角色A work_001 [phase]"""
@@ -202,6 +251,7 @@ class CharacterDistillerPlugin(Star):
                     phase=phase,
                     llm_generate=llm_generate,
                     max_evidence=self._max_evidence(),
+                    detail_level=self._detail_level(),
                 )
             else:
                 result = "未找到可用 LLM Provider，已使用规则模式。\n\n" + self.pipeline.run_mvp(
@@ -220,7 +270,21 @@ class CharacterDistillerPlugin(Star):
 
     def _max_evidence(self) -> int:
         distillation = self.config.get("distillation", {})
-        return int(distillation.get("ai_max_evidence", 48))
+        override = int(distillation.get("ai_max_evidence", 0) or 0)
+        if override > 0:
+            return override
+        return {
+            "1_quick": 12,
+            "2_light": 24,
+            "3_balanced": 48,
+            "4_deep": 80,
+            "5_canonical": 120,
+            "6_exhaustive": 180,
+        }.get(self._detail_level(), 48)
+
+    def _detail_level(self) -> str:
+        distillation = self.config.get("distillation", {})
+        return str(distillation.get("detail_level", "3_balanced"))
 
     async def _llm_generate(self, event: AstrMessageEvent):
         if not self.config.get("provider", {}).get("enable_ai_distillation", True):
@@ -250,10 +314,12 @@ class CharacterDistillerPlugin(Star):
             "角色人格蒸馏器命令：\n"
             "/distill import <作品名> <txt或md文件路径>\n"
             "/distill split <work_id>\n"
+            "/distill import-result <work_id|new> <json路径> [yes|no]  # 导入外部蒸馏 JSON 并可自动导出\n"
             "/distill evidence build <角色名> <work_id>  # 有 Provider 时使用 AI 提取\n"
             "/distill persona build <角色名> <work_id> [phase|auto]  # 有 Provider 时使用 AI 蒸馏\n"
             "/distill style build <角色名> <work_id>  # 有 Provider 时使用 AI 分析语言指纹\n"
             "/distill export <persona|memorix|angel|kb|all> <角色名> <work_id> [phase|auto]\n"
+            "/distill export-package <角色名> <work_id>  # 导出所有阶段 Persona/KB/Memorix/Angel\n"
             "/distill run <角色名> <work_id> [phase|auto]  # AI 证据+人格+语言指纹+导出\n"
             "/distill status [work_id]\n\n"
             f"数据目录：{self.workspace.root}"

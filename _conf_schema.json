@@ -76,10 +76,15 @@
         "type": "bool",
         "default": true
       },
+      "detail_level": {
+        "description": "AI 蒸馏精细程度：1_quick 快速概览；2_light 轻量；3_balanced 均衡；4_deep 深度；5_canonical 高保真；6_exhaustive 穷尽式。",
+        "type": "string",
+        "default": "3_balanced"
+      },
       "ai_max_evidence": {
-        "description": "每次 AI 提取/蒸馏最多送入模型的候选证据段落数。",
+        "description": "高级覆盖项：每次 AI 提取/蒸馏最多送入模型的候选证据段落数。填 0 时按 detail_level 自动选择。",
         "type": "int",
-        "default": 48
+        "default": 0
       }
     }
   }

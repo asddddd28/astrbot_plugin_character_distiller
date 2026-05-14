@@ -42,10 +42,29 @@ def _sample_evenly(rows: list[dict], limit: int) -> list[dict]:
     return sampled[:limit]
 
 
+DETAIL_GUIDES = {
+    "1_quick": "快速概览：只提取最核心证据和最短人格摘要，适合试跑。",
+    "2_light": "轻量蒸馏：覆盖主要阶段和关键证据，输出保持简洁。",
+    "3_balanced": "均衡蒸馏：覆盖阶段弧线、行为、关系和语言风格，适合常规使用。",
+    "4_deep": "深度蒸馏：加强反证、触发条件、关系变化和阶段差异。",
+    "5_canonical": "高保真蒸馏：严格保留 evidence_id，细分人格机制、语言指纹和防跑偏规则。",
+    "6_exhaustive": "穷尽式蒸馏：尽量完整覆盖重要证据和阶段差异，成本较高，适合最终归档。",
+}
+
+
 class AIDistiller:
-    def __init__(self, llm_generate: LLMGenerate, max_evidence: int = 48):
+    def __init__(
+        self,
+        llm_generate: LLMGenerate,
+        max_evidence: int = 48,
+        detail_level: str = "3_balanced",
+    ):
         self.llm_generate = llm_generate
         self.max_evidence = max_evidence
+        self.detail_level = detail_level
+
+    def _detail_guide(self) -> str:
+        return DETAIL_GUIDES.get(self.detail_level, DETAIL_GUIDES["3_balanced"])
 
     async def build_evidence(self, work_id: str, character: str, paragraphs: list[dict]) -> list[dict]:
         matched = [p for p in paragraphs if character in p.get("text", "")]
@@ -54,6 +73,8 @@ class AIDistiller:
         samples = _sample_evenly(matched, self.max_evidence)
         prompt = {
             "task": "从原文片段中为角色提取可追溯证据卡。只依据给定片段，不要编造。",
+            "detail_level": self.detail_level,
+            "detail_guide": self._detail_guide(),
             "work_id": work_id,
             "character": character,
             "requirements": [
@@ -120,6 +141,8 @@ class AIDistiller:
         selected = sorted(selected, key=lambda c: c.get("confidence", 0), reverse=True)[:32]
         prompt = {
             "task": "基于证据卡蒸馏角色人格卡。只使用 evidence_id 支持的判断。",
+            "detail_level": self.detail_level,
+            "detail_guide": self._detail_guide(),
             "work_id": work_id,
             "character": character,
             "phase": phase,
@@ -163,6 +186,8 @@ class AIDistiller:
         samples = _sample_evenly(related, 32)
         prompt = {
             "task": "从原文片段和台词候选中蒸馏角色语言指纹。不要复述长原文。",
+            "detail_level": self.detail_level,
+            "detail_guide": self._detail_guide(),
             "work_id": work_id,
             "character": character,
             "schema": {
