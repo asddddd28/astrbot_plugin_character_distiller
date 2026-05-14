@@ -7,6 +7,7 @@ from astrbot.api.event import AstrMessageEvent, MessageEventResult, filter
 from astrbot.api.star import Context, Star, register
 
 from .distiller.pipeline import CharacterDistillerPipeline
+from .distiller.utils import safe_filename
 from .storage.workspace import DistillerWorkspace
 
 
@@ -17,7 +18,7 @@ PLUGIN_NAME = "astrbot_plugin_character_distiller"
     PLUGIN_NAME,
     "asddd",
     "角色动态人格蒸馏器：导入文本、生成证据卡、人格 Prompt、语言指纹和记忆导出。",
-    "0.3.0",
+    "0.4.0",
 )
 class CharacterDistillerPlugin(Star):
     def __init__(self, context: Context, config=None):
@@ -236,6 +237,42 @@ class CharacterDistillerPlugin(Star):
         event.set_result(MessageEventResult().message(result))
 
     @filter.permission_type(filter.PermissionType.ADMIN)
+    @distill.command("apply")
+    async def apply_to_astrbot(
+        self,
+        event: AstrMessageEvent,
+        target: str = "",
+        character: str = "",
+        work_id: str = "",
+        name: str = "",
+        embedding_provider_id: str = "",
+    ):
+        """写入 AstrBot：/distill apply persona|kb|all 角色A work_001 [名称] [embedding_provider_id]"""
+        if target not in {"persona", "kb", "all"} or not character or not work_id:
+            event.set_result(
+                MessageEventResult().message(
+                    "用法：/distill apply <persona|kb|all> <角色名> <work_id> [persona前缀或知识库名] [embedding_provider_id]\n"
+                    "示例：/distill apply persona 世凪 work_004 世凪\n"
+                    "示例：/distill apply kb 世凪 work_004 世凪原著知识库 openai_embedding\n"
+                    "示例：/distill apply all 世凪 work_004 世凪原著知识库 openai_embedding"
+                )
+            )
+            return
+        try:
+            outputs = []
+            if target in {"persona", "all"}:
+                prefix = name if target == "persona" and name else character
+                outputs.append(await self._apply_personas(character, work_id, prefix))
+            if target in {"kb", "all"}:
+                kb_name = name or f"{character}原著知识库"
+                outputs.append(await self._apply_knowledge_base(character, work_id, kb_name, embedding_provider_id))
+        except Exception as exc:
+            logger.error("distill apply failed: %s", exc, exc_info=True)
+            event.set_result(MessageEventResult().message(f"写入 AstrBot 失败：{exc}"))
+            return
+        event.set_result(MessageEventResult().message("\n\n".join(outputs)))
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
     @distill.command("run")
     async def run_all(self, event: AstrMessageEvent, character: str = "", work_id: str = "", phase: str = "auto"):
         """跑通 MVP 流程：/distill run 角色A work_001 [phase]"""
@@ -286,6 +323,110 @@ class CharacterDistillerPlugin(Star):
         distillation = self.config.get("distillation", {})
         return str(distillation.get("detail_level", "3_balanced"))
 
+    async def _apply_personas(self, character: str, work_id: str, persona_prefix: str) -> str:
+        base = self.workspace.require_work_dir(work_id)
+        char_file = safe_filename(character)
+        prompt_paths = sorted((base / "exports").glob(f"astrbot_persona_prompt_{char_file}_*.txt"))
+        if not prompt_paths:
+            self.pipeline.export_package(work_id, character)
+            prompt_paths = sorted((base / "exports").glob(f"astrbot_persona_prompt_{char_file}_*.txt"))
+        if not prompt_paths:
+            raise RuntimeError("没有找到 Persona Prompt 导出文件，请先执行 /distill export-package")
+
+        skills = self._persona_skills()
+        created = []
+        skipped = []
+        for prompt_path in prompt_paths:
+            phase = prompt_path.stem.replace(f"astrbot_persona_prompt_{char_file}_", "", 1)
+            persona_id = safe_filename(f"{persona_prefix}_{phase}")
+            prompt = prompt_path.read_text(encoding="utf-8")
+            try:
+                await self.context.persona_manager.create_persona(
+                    persona_id=persona_id,
+                    system_prompt=prompt,
+                    begin_dialogs=None,
+                    tools=None,
+                    skills=skills,
+                    custom_error_message="当前人格设定无法回答时，请保持原著证据边界，不要编造。",
+                )
+                created.append(persona_id)
+            except ValueError:
+                skipped.append(persona_id)
+
+        lines = ["AstrBot Persona 写入完成："]
+        if created:
+            lines.append("新增：" + ", ".join(created))
+        if skipped:
+            lines.append("已存在，跳过：" + ", ".join(skipped))
+        return "\n".join(lines)
+
+    async def _apply_knowledge_base(
+        self,
+        character: str,
+        work_id: str,
+        kb_name: str,
+        embedding_provider_id: str,
+    ) -> str:
+        base = self.workspace.require_work_dir(work_id)
+        char_file = safe_filename(character)
+        kb_chunks_dir = base / "rag_export" / "kb_chunks" / char_file
+        knowledge_dir = base / "rag_export" / "knowledge_cards" / char_file
+        if not kb_chunks_dir.exists() and not knowledge_dir.exists():
+            self.pipeline.export_package(work_id, character)
+
+        chunks = []
+        for path in sorted(kb_chunks_dir.glob("*.md")) if kb_chunks_dir.exists() else []:
+            chunks.append(path.read_text(encoding="utf-8"))
+        for path in sorted(knowledge_dir.glob("*.md")) if knowledge_dir.exists() else []:
+            chunks.append(path.read_text(encoding="utf-8"))
+        if not chunks:
+            raise RuntimeError("没有找到 KB Markdown 导出文件，请先执行 /distill export-package")
+
+        kb_mgr = self.context.kb_manager
+        kb_helper = await kb_mgr.get_kb_by_name(kb_name)
+        created_kb = False
+        if not kb_helper:
+            provider_id = embedding_provider_id or self._default_embedding_provider_id()
+            if not provider_id:
+                raise RuntimeError("创建知识库需要 embedding_provider_id。请在配置 default_embedding_provider_id，或命令末尾传入。")
+            kb_helper = await kb_mgr.create_kb(
+                kb_name=kb_name,
+                description=f"{character} 原著证据和知识卡，由 Character Distiller 导入。",
+                emoji="📚",
+                embedding_provider_id=provider_id,
+                chunk_size=768,
+                chunk_overlap=80,
+                top_k_dense=50,
+                top_k_sparse=50,
+                top_m_final=8,
+            )
+            created_kb = True
+
+        document = await kb_helper.upload_document(
+            file_name=f"{character}_{work_id}_distilled.md",
+            file_content=None,
+            file_type="md",
+            pre_chunked_text=chunks,
+        )
+        return (
+            "AstrBot Knowledge Base 写入完成：\n"
+            f"知识库：{kb_name}{'（新建）' if created_kb else '（已有）'}\n"
+            f"文档：{document.doc_name}\n"
+            f"chunks：{len(chunks)}"
+        )
+
+    def _persona_skills(self) -> list[str] | None:
+        value = self.config.get("application", {}).get(
+            "persona_skills",
+            "evidence-reviewer,persona-distiller,style-fingerprint,knowledge-distiller",
+        )
+        if not value:
+            return None
+        return [item.strip() for item in str(value).split(",") if item.strip()]
+
+    def _default_embedding_provider_id(self) -> str:
+        return str(self.config.get("application", {}).get("default_embedding_provider_id", ""))
+
     async def _llm_generate(self, event: AstrMessageEvent):
         if not self.config.get("provider", {}).get("enable_ai_distillation", True):
             return None
@@ -320,6 +461,7 @@ class CharacterDistillerPlugin(Star):
             "/distill style build <角色名> <work_id>  # 有 Provider 时使用 AI 分析语言指纹\n"
             "/distill export <persona|memorix|angel|kb|all> <角色名> <work_id> [phase|auto]\n"
             "/distill export-package <角色名> <work_id>  # 导出所有阶段 Persona/KB/Memorix/Angel\n"
+            "/distill apply <persona|kb|all> <角色名> <work_id> [名称] [embedding_provider_id]  # 写入 AstrBot Persona/KB\n"
             "/distill run <角色名> <work_id> [phase|auto]  # AI 证据+人格+语言指纹+导出\n"
             "/distill status [work_id]\n\n"
             f"数据目录：{self.workspace.root}"

@@ -57,6 +57,22 @@
       }
     }
   },
+  "application": {
+    "description": "写入 AstrBot 配置",
+    "type": "object",
+    "items": {
+      "default_embedding_provider_id": {
+        "description": "创建 AstrBot Knowledge Base 时使用的 Embedding Provider ID。留空时需要在 /distill apply kb/all 命令末尾传入。",
+        "type": "string",
+        "default": ""
+      },
+      "persona_skills": {
+        "description": "写入 AstrBot Persona 时绑定的 Skills，多个用英文逗号分隔。留空表示使用 AstrBot 默认行为。",
+        "type": "string",
+        "default": "evidence-reviewer,persona-distiller,style-fingerprint,knowledge-distiller"
+      }
+    }
+  },
   "distillation": {
     "description": "蒸馏策略",
     "type": "object",
