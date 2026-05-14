@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from .extractors import EvidenceExtractor, PersonaExtractor, SpeechExtractor
@@ -7,7 +8,7 @@ from .ai_distiller import AIDistiller, LLMGenerate
 from .importer import TextImporter
 from .result_importer import DistilledResultImporter
 from .splitter import TextSplitter
-from .utils import safe_filename
+from .utils import safe_filename, short
 from ..rag.exporters import RagExporter
 from ..runtime.persona_writer import PersonaWriter
 from ..storage.workspace import DistillerWorkspace
@@ -203,6 +204,74 @@ class CharacterDistillerPipeline:
 
         return "完整导出包生成完成：\n" + "\n".join(str(path) for path in outputs)
 
+    def recall(
+        self,
+        work_id: str,
+        character: str,
+        query: str,
+        top_k: int = 5,
+        context_radius: int = 3,
+        max_chars_per_hit: int = 700,
+    ) -> str:
+        if not character or not query:
+            raise RuntimeError("用法：/distill recall <角色名> <work_id> <关键词> [top_k]")
+        base = self.workspace.require_work_dir(work_id)
+        char_file = safe_filename(character)
+        top_k = max(1, min(int(top_k or 5), 10))
+        context_radius = max(0, min(int(context_radius or 0), 10))
+        max_chars_per_hit = max(200, min(int(max_chars_per_hit or 700), 2000))
+
+        terms = self._recall_terms(character, query)
+        hits = []
+        for row in self.workspace.read_jsonl(base / "distilled" / f"knowledge_cards_{char_file}.jsonl"):
+            self._append_recall_hit(hits, "knowledge", row.get("knowledge_id") or row.get("type") or "knowledge", row, terms)
+        for row in self.workspace.read_jsonl(base / "distilled" / f"evidence_cards_{char_file}.jsonl"):
+            self._append_recall_hit(hits, "evidence", row.get("evidence_id") or row.get("id") or "evidence", row, terms)
+        for path in sorted((base / "rag_export" / "kb_chunks" / char_file).glob("*.md")):
+            self._append_recall_hit(hits, "kb", path.stem, path.read_text(encoding="utf-8"), terms)
+        for path in sorted((base / "distilled").glob(f"persona_card_{char_file}_*.json")):
+            label = path.stem.replace(f"persona_card_{char_file}_", "", 1)
+            self._append_recall_hit(hits, "persona", label, self.workspace.read_json(path, {}), terms)
+
+        hits.sort(key=lambda item: item[1], reverse=True)
+        paragraphs = self.workspace.read_jsonl(base / "index" / "paragraphs.jsonl")
+        para_hits = []
+        for idx, para in enumerate(paragraphs):
+            score = self._recall_score(str(para.get("text", "")), terms)
+            if score:
+                para_hits.append((score, idx, para))
+        para_hits.sort(key=lambda item: item[0], reverse=True)
+
+        lines = [f"原文回忆检索：{character} / {work_id}", f"关键词：{query}"]
+        lines.append("")
+        lines.append("蒸馏命中：")
+        if hits:
+            for kind, score, label, text in hits[:top_k]:
+                lines.append(f"- [{kind}] {label} score={score}")
+                lines.append("  " + short(text, max_chars_per_hit).replace("\n", "\n  "))
+        else:
+            lines.append("- 无")
+
+        lines.append("")
+        if para_hits:
+            lines.append(f"原文段落命中（上下文半径 {context_radius}）：")
+            used = set()
+            for score, idx, para in para_hits[:top_k]:
+                start = max(0, idx - context_radius)
+                end = min(len(paragraphs), idx + context_radius + 1)
+                if (start, end) in used:
+                    continue
+                used.add((start, end))
+                lines.append(f"- {para.get('paragraph_id')} {para.get('chapter_id', '')} score={score}")
+                for ctx in paragraphs[start:end]:
+                    marker = ">" if ctx.get("paragraph_id") == para.get("paragraph_id") else " "
+                    lines.append(f"  {marker} {ctx.get('paragraph_id')}: {short(str(ctx.get('text', '')), max_chars_per_hit)}")
+        elif (base / "index" / "paragraphs.jsonl").exists():
+            lines.append("原文段落命中：无")
+        else:
+            lines.append("原文段落命中：当前 work 没有原文段落索引；如果这是外部蒸馏 JSON 导入，只能回查蒸馏产物。")
+        return "\n".join(lines)
+
     def run_mvp(self, work_id: str, character: str, phase: str = "auto") -> str:
         parts = [
             self.build_evidence(work_id, character),
@@ -341,6 +410,35 @@ class CharacterDistillerPipeline:
             f"distilled：{', '.join(distilled) if distilled else '无'}\n"
             f"exports：{', '.join(exports) if exports else '无'}"
         )
+
+    @staticmethod
+    def _recall_terms(character: str, query: str) -> list[str]:
+        raw = [character, query]
+        raw.extend(re.split(r"[\s,，、|/]+", query))
+        return [item.strip().lower() for item in raw if item and item.strip()]
+
+    @staticmethod
+    def _recall_score(text: str, terms: list[str]) -> int:
+        lowered = str(text or "").lower()
+        score = 0
+        for term in terms:
+            count = lowered.count(term)
+            if count:
+                score += count * (4 if len(term) >= 2 else 1)
+        return score
+
+    @classmethod
+    def _append_recall_hit(cls, hits: list, kind: str, label: str, value, terms: list[str]) -> None:
+        text = cls._flatten_recall_obj(value)
+        score = cls._recall_score(text, terms)
+        if score:
+            hits.append((kind, score, label, text))
+
+    @staticmethod
+    def _flatten_recall_obj(value) -> str:
+        if isinstance(value, dict):
+            return "\n".join(f"{key}: {item}" for key, item in value.items())
+        return str(value)
 
     def _load_evidence(self, work_id: str, character: str) -> list[dict]:
         base = self.workspace.require_work_dir(work_id)

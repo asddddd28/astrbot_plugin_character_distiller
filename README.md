@@ -61,6 +61,15 @@ AstrBot 会读取插件根目录的 `_conf_schema.json` 并生成插件配置。
 | `distill_provider_id` | `""` | 用于蒸馏的 LLM Provider ID。留空时使用当前会话正在使用的聊天模型。 |
 | `eval_provider_id` | `""` | 预留的评估模型 Provider ID。 |
 
+### storage
+
+| 配置项 | 默认值 | 说明 |
+| --- | --- | --- |
+| `enable_local_corpus` | `true` | 是否启用本地语料库。 |
+| `max_context_radius` | `3` | 证据回查时前后文段落数。 |
+| `recall_context_radius` | `3` | `/distill recall` 回读原文时命中段落前后的上下文段落数。 |
+| `recall_max_chars_per_hit` | `700` | `/distill recall` 每条蒸馏命中或原文段落最多展示的字符数。 |
+
 ### distillation
 
 | 配置项 | 默认值 | 说明 |
@@ -116,6 +125,7 @@ AstrBot 会读取插件根目录的 `_conf_schema.json` 并生成插件配置。
 /distill export <persona|memorix|angel|kb|all> <角色名> <work_id> [phase|auto]
 /distill export-package <角色名> <work_id>
 /distill apply <persona|kb|memorix|all> <角色名> <work_id> [名称或knowledge_type] [embedding_provider_id]
+/distill recall <角色名> <work_id> <关键词> [top_k]
 /distill run <角色名> <work_id> [phase|auto]
 ```
 
@@ -129,6 +139,7 @@ AstrBot 会读取插件根目录的 `_conf_schema.json` 并生成插件配置。
 - `apply kb` 会把 KB Markdown 写入 AstrBot Knowledge Base，并触发向量化。
 - `apply memorix` 会把人格、知识卡、证据卡和语言指纹写入已加载的 Memorix 当前作用域。
 - `apply all` 会同时写入 Persona、Knowledge Base 和 Memorix。
+- `recall` 用于“回忆原文细节”：先查证据/知识/KB/Persona，再按段落索引回读原文上下文。
 - 在 AI 蒸馏模式下，`evidence`、`persona`、`style`、`run` 会调用 AstrBot LLM Provider。
 - 在没有可用 Provider 时，插件会回退到规则模式。
 
@@ -226,6 +237,24 @@ works/<work_id>/rag_export/memorix_import/<角色>/mrx_<work_id>_<hash>.json
 - Memorix 直接写入依赖 Memorix 插件已在 AstrBot 中加载；没有加载时会退回到导入 JSON。
 - Angel Memory 目前仍以 JSON 导出文件形式提供，建议在对应插件中导入 `exports/` 下的 JSON。
 - HAPI 出现不明命令，例如 `command=a`，不要批准。应使用上面的 `/distill apply ...` 显式命令。
+
+### 原文长记忆与回忆细节
+
+原文全文不建议直接写入 Memorix。插件采用分层存储：
+
+- `raw/normalized.txt`：完整原文档案，作为权威来源。
+- `index/paragraphs.jsonl`、`index/scenes.jsonl`：原文段落和粗略场景索引。
+- `distilled/`：证据卡、知识卡、人格卡和语言指纹。
+- Memorix：长期蒸馏记忆，用于角色事实、人格、风格和关键证据检索。
+- Knowledge Base/RAG：适合放原文检索块，辅助查找具体情节。
+
+需要“回忆细节”时，用：
+
+```text
+/distill recall 世凪 work_004 思维空间 5
+```
+
+它会先返回证据卡、知识卡、KB chunk 或 Persona 命中，再返回原文段落上下文。如果该 work 是外部蒸馏 JSON 导入、没有原始 txt 和段落索引，`recall` 会只回查蒸馏产物，并提示缺少原文索引。这样可以避免把整部小说塞进 Memorix，同时保留需要时回读原文的能力。
 
 成功使用 AI 蒸馏时，响应中会出现类似：
 
@@ -345,6 +374,7 @@ repo: https://github.com/asddddd28/astrbot_plugin_character_distiller
 
 ## 版本
 
+- `v0.6.0`：新增 `/distill recall`，支持从蒸馏产物定位并回读原文段落上下文，形成 Memorix 长期记忆与原文档案分层编排。
 - `v0.5.0`：新增 `/distill apply memorix`，支持直接写入已加载的 Memorix 当前作用域，并提供导入 JSON 降级路径。
 - `v0.4.0`：新增 `/distill apply`，支持把导出结果写入 AstrBot Persona 和 Knowledge Base。
 - `v0.3.0`：新增外部蒸馏 JSON 导入、完整导出包、导出编排 Skill，以及 1-6 级蒸馏精细度设置。

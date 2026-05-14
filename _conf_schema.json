@@ -33,6 +33,16 @@
         "description": "证据回查时前后文段落数。",
         "type": "int",
         "default": 3
+      },
+      "recall_context_radius": {
+        "description": "/distill recall 回读原文时命中段落前后的上下文段落数。",
+        "type": "int",
+        "default": 3
+      },
+      "recall_max_chars_per_hit": {
+        "description": "/distill recall 每条蒸馏命中或原文段落最多展示的字符数。",
+        "type": "int",
+        "default": 700
       }
     }
   },

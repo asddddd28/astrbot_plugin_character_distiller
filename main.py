@@ -22,7 +22,7 @@ PLUGIN_NAME = "astrbot_plugin_character_distiller"
     PLUGIN_NAME,
     "asddd",
     "角色动态人格蒸馏器：导入文本、生成证据卡、人格 Prompt、语言指纹和记忆导出。",
-    "0.5.0",
+    "0.6.0",
 )
 class CharacterDistillerPlugin(Star):
     def __init__(self, context: Context, config=None):
@@ -279,6 +279,34 @@ class CharacterDistillerPlugin(Star):
             event.set_result(MessageEventResult().message(f"写入 AstrBot 失败：{exc}"))
             return
         event.set_result(MessageEventResult().message("\n\n".join(outputs)))
+
+    @distill.command("recall")
+    async def recall(
+        self,
+        event: AstrMessageEvent,
+        character: str = "",
+        work_id: str = "",
+        query: str = "",
+        top_k: int = 5,
+    ):
+        """回查原文细节：/distill recall 角色A work_001 关键词 [top_k]"""
+        if not character or not work_id or not query:
+            event.set_result(MessageEventResult().message("用法：/distill recall <角色名> <work_id> <关键词> [top_k]"))
+            return
+        try:
+            result = self.pipeline.recall(
+                work_id=work_id,
+                character=character,
+                query=query,
+                top_k=top_k,
+                context_radius=self._recall_context_radius(),
+                max_chars_per_hit=self._recall_max_chars_per_hit(),
+            )
+        except Exception as exc:
+            logger.error("distill recall failed: %s", exc, exc_info=True)
+            event.set_result(MessageEventResult().message(f"原文回忆检索失败：{exc}"))
+            return
+        event.set_result(MessageEventResult().message(result))
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @distill.command("run")
@@ -674,6 +702,12 @@ class CharacterDistillerPlugin(Star):
     def _default_embedding_provider_id(self) -> str:
         return str(self.config.get("application", {}).get("default_embedding_provider_id", ""))
 
+    def _recall_context_radius(self) -> int:
+        return int(self.config.get("storage", {}).get("recall_context_radius", 3) or 3)
+
+    def _recall_max_chars_per_hit(self) -> int:
+        return int(self.config.get("storage", {}).get("recall_max_chars_per_hit", 700) or 700)
+
     def _enable_memorix_direct_write(self) -> bool:
         return bool(self.config.get("application", {}).get("enable_memorix_direct_write", True))
 
@@ -719,6 +753,7 @@ class CharacterDistillerPlugin(Star):
             "/distill export <persona|memorix|angel|kb|all> <角色名> <work_id> [phase|auto]\n"
             "/distill export-package <角色名> <work_id>  # 导出所有阶段 Persona/KB/Memorix/Angel\n"
             "/distill apply <persona|kb|memorix|all> <角色名> <work_id> [名称或knowledge_type] [embedding_provider_id]  # 写入 Persona/KB/Memorix\n"
+            "/distill recall <角色名> <work_id> <关键词> [top_k]  # 查蒸馏证据并回读原文上下文\n"
             "/distill run <角色名> <work_id> [phase|auto]  # AI 证据+人格+语言指纹+导出\n"
             "/distill status [work_id]\n\n"
             f"数据目录：{self.workspace.root}"
