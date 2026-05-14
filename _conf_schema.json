@@ -1,10 +1,15 @@
 {
   "provider": {
-    "description": "模型配置（当前 MVP 先使用本地启发式流程，后续可接入 LLM Provider）",
+    "description": "模型配置",
     "type": "object",
     "items": {
+      "enable_ai_distillation": {
+        "description": "启用 AstrBot LLM Provider 进行 AI 提取和蒸馏；关闭后使用纯规则模式",
+        "type": "bool",
+        "default": true
+      },
       "distill_provider_id": {
-        "description": "用于蒸馏的 LLM Provider ID（预留）",
+        "description": "用于蒸馏的 LLM Provider ID；留空时使用当前会话正在使用的聊天模型",
         "type": "string",
         "default": ""
       },
@@ -70,6 +75,11 @@
         "description": "启用反证检查",
         "type": "bool",
         "default": true
+      },
+      "ai_max_evidence": {
+        "description": "每次 AI 提取/蒸馏最多送入模型的候选证据段落数",
+        "type": "int",
+        "default": 48
       }
     }
   }

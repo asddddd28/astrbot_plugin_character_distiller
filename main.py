@@ -17,12 +17,13 @@ PLUGIN_NAME = "astrbot_plugin_character_distiller"
     PLUGIN_NAME,
     "asddd",
     "角色动态人格蒸馏器：导入文本、生成证据卡、人格 Prompt、语言指纹和记忆导出。",
-    "0.1.0",
+    "0.2.0",
 )
 class CharacterDistillerPlugin(Star):
-    def __init__(self, context: Context):
+    def __init__(self, context: Context, config=None):
         super().__init__(context)
         self.context = context
+        self.config = config or {}
         self.workspace = DistillerWorkspace(PLUGIN_NAME)
         self.pipeline = CharacterDistillerPipeline(self.workspace)
 
@@ -97,7 +98,16 @@ class CharacterDistillerPlugin(Star):
             )
             return
         try:
-            result = self.pipeline.build_evidence(work_id=work_id, character=character)
+            llm_generate = await self._llm_generate(event)
+            if llm_generate:
+                result = await self.pipeline.build_evidence_ai(
+                    work_id=work_id,
+                    character=character,
+                    llm_generate=llm_generate,
+                    max_evidence=self._max_evidence(),
+                )
+            else:
+                result = self.pipeline.build_evidence(work_id=work_id, character=character)
         except Exception as exc:
             logger.error("distill evidence failed: %s", exc, exc_info=True)
             event.set_result(MessageEventResult().message(f"证据卡生成失败：{exc}"))
@@ -114,7 +124,17 @@ class CharacterDistillerPlugin(Star):
             )
             return
         try:
-            result = self.pipeline.build_persona(work_id=work_id, character=character, phase=phase)
+            llm_generate = await self._llm_generate(event)
+            if llm_generate:
+                result = await self.pipeline.build_persona_ai(
+                    work_id=work_id,
+                    character=character,
+                    phase=phase,
+                    llm_generate=llm_generate,
+                    max_evidence=self._max_evidence(),
+                )
+            else:
+                result = self.pipeline.build_persona(work_id=work_id, character=character, phase=phase)
         except Exception as exc:
             logger.error("distill persona failed: %s", exc, exc_info=True)
             event.set_result(MessageEventResult().message(f"人格卡生成失败：{exc}"))
@@ -131,7 +151,16 @@ class CharacterDistillerPlugin(Star):
             )
             return
         try:
-            result = self.pipeline.build_style(work_id=work_id, character=character)
+            llm_generate = await self._llm_generate(event)
+            if llm_generate:
+                result = await self.pipeline.build_style_ai(
+                    work_id=work_id,
+                    character=character,
+                    llm_generate=llm_generate,
+                    max_evidence=self._max_evidence(),
+                )
+            else:
+                result = self.pipeline.build_style(work_id=work_id, character=character)
         except Exception as exc:
             logger.error("distill style failed: %s", exc, exc_info=True)
             event.set_result(MessageEventResult().message(f"语言指纹生成失败：{exc}"))
@@ -165,7 +194,21 @@ class CharacterDistillerPlugin(Star):
             event.set_result(MessageEventResult().message("用法：/distill run <角色名> <work_id> [phase|auto]"))
             return
         try:
-            result = self.pipeline.run_mvp(work_id=work_id, character=character, phase=phase)
+            llm_generate = await self._llm_generate(event)
+            if llm_generate:
+                result = await self.pipeline.run_ai(
+                    work_id=work_id,
+                    character=character,
+                    phase=phase,
+                    llm_generate=llm_generate,
+                    max_evidence=self._max_evidence(),
+                )
+            else:
+                result = "未找到可用 LLM Provider，已使用规则模式。\n\n" + self.pipeline.run_mvp(
+                    work_id=work_id,
+                    character=character,
+                    phase=phase,
+                )
         except Exception as exc:
             logger.error("distill run failed: %s", exc, exc_info=True)
             event.set_result(MessageEventResult().message(f"流程执行失败：{exc}"))
@@ -175,16 +218,43 @@ class CharacterDistillerPlugin(Star):
     async def terminate(self):
         logger.info("Character Distiller terminated")
 
+    def _max_evidence(self) -> int:
+        distillation = self.config.get("distillation", {})
+        return int(distillation.get("ai_max_evidence", 48))
+
+    async def _llm_generate(self, event: AstrMessageEvent):
+        if not self.config.get("provider", {}).get("enable_ai_distillation", True):
+            return None
+        provider_id = self.config.get("provider", {}).get("distill_provider_id", "")
+        if not provider_id:
+            try:
+                provider_id = await self.context.get_current_chat_provider_id(event.unified_msg_origin)
+            except Exception:
+                provider_id = ""
+        if not provider_id:
+            return None
+
+        async def generate(system_prompt: str, prompt: str) -> str:
+            response = await self.context.llm_generate(
+                chat_provider_id=provider_id,
+                system_prompt=system_prompt,
+                prompt=prompt,
+                temperature=0.2,
+            )
+            return response.completion_text
+
+        return generate
+
     def _help_text(self) -> str:
         return (
-            "角色人格蒸馏器 MVP 命令：\n"
+            "角色人格蒸馏器命令：\n"
             "/distill import <作品名> <txt或md文件路径>\n"
             "/distill split <work_id>\n"
-            "/distill evidence build <角色名> <work_id>\n"
-            "/distill persona build <角色名> <work_id> [phase|auto]\n"
-            "/distill style build <角色名> <work_id>\n"
+            "/distill evidence build <角色名> <work_id>  # 有 Provider 时使用 AI 提取\n"
+            "/distill persona build <角色名> <work_id> [phase|auto]  # 有 Provider 时使用 AI 蒸馏\n"
+            "/distill style build <角色名> <work_id>  # 有 Provider 时使用 AI 分析语言指纹\n"
             "/distill export <persona|memorix|angel|kb|all> <角色名> <work_id> [phase|auto]\n"
-            "/distill run <角色名> <work_id> [phase|auto]\n"
+            "/distill run <角色名> <work_id> [phase|auto]  # AI 证据+人格+语言指纹+导出\n"
             "/distill status [work_id]\n\n"
             f"数据目录：{self.workspace.root}"
         )

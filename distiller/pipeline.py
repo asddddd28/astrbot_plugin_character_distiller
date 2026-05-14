@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .extractors import EvidenceExtractor, PersonaExtractor, SpeechExtractor
+from .ai_distiller import AIDistiller, LLMGenerate
 from .importer import TextImporter
 from .splitter import TextSplitter
 from .utils import safe_filename
@@ -139,6 +140,104 @@ class CharacterDistillerPipeline:
             self.build_evidence(work_id, character),
             self.build_persona(work_id, character, phase),
             self.build_style(work_id, character),
+            self.export(work_id, character, "all", phase),
+        ]
+        return "\n\n".join(parts)
+
+    async def build_evidence_ai(
+        self,
+        work_id: str,
+        character: str,
+        llm_generate: LLMGenerate,
+        max_evidence: int = 48,
+    ) -> str:
+        base = self.workspace.require_work_dir(work_id)
+        paragraphs = self.workspace.read_jsonl(base / "index" / "paragraphs.jsonl")
+        if not paragraphs:
+            raise RuntimeError("尚未切分文本，请先执行 /distill split")
+        cards = await AIDistiller(llm_generate, max_evidence).build_evidence(
+            work_id,
+            character,
+            paragraphs,
+        )
+        if not cards:
+            return self.build_evidence(work_id, character)
+        char_file = safe_filename(character)
+        out = base / "distilled" / f"evidence_cards_{char_file}.jsonl"
+        self.workspace.write_jsonl(out, cards)
+        return f"AI 证据卡生成完成：{len(cards)} 张\n输出：{out}"
+
+    async def build_persona_ai(
+        self,
+        work_id: str,
+        character: str,
+        phase: str,
+        llm_generate: LLMGenerate,
+        max_evidence: int = 48,
+    ) -> str:
+        cards = self._load_evidence(work_id, character)
+        if not cards:
+            await self.build_evidence_ai(work_id, character, llm_generate, max_evidence)
+            cards = self._load_evidence(work_id, character)
+        if not cards:
+            raise RuntimeError("尚未生成证据卡，请先执行 /distill evidence build")
+        persona = await AIDistiller(llm_generate, max_evidence).build_persona(
+            work_id,
+            character,
+            cards,
+            phase,
+        )
+        base = self.workspace.require_work_dir(work_id)
+        char_file = safe_filename(character)
+        phase_file = safe_filename(persona["phase"])
+        out = base / "distilled" / f"persona_card_{char_file}_{phase_file}.json"
+        self.workspace.write_json(out, persona)
+        return (
+            f"AI 人格卡生成完成：{character} / {persona['phase']}\n"
+            f"证据数：{len(persona.get('evidence_ids', []))}\n"
+            f"置信度：{persona.get('confidence')}\n"
+            f"输出：{out}"
+        )
+
+    async def build_style_ai(
+        self,
+        work_id: str,
+        character: str,
+        llm_generate: LLMGenerate,
+        max_evidence: int = 48,
+    ) -> str:
+        base = self.workspace.require_work_dir(work_id)
+        paragraphs = self.workspace.read_jsonl(base / "index" / "paragraphs.jsonl")
+        utterances = self.workspace.read_jsonl(base / "index" / "utterances.jsonl")
+        if not paragraphs:
+            raise RuntimeError("尚未切分文本，请先执行 /distill split")
+        speech = await AIDistiller(llm_generate, max_evidence).build_style(
+            work_id,
+            character,
+            paragraphs,
+            utterances,
+        )
+        char_file = safe_filename(character)
+        out = base / "distilled" / f"speech_fingerprint_{char_file}.json"
+        self.workspace.write_json(out, speech)
+        return (
+            f"AI 语言指纹生成完成：{character}\n"
+            f"台词样本：{speech.get('sample_count', 0)}\n"
+            f"输出：{out}"
+        )
+
+    async def run_ai(
+        self,
+        work_id: str,
+        character: str,
+        phase: str,
+        llm_generate: LLMGenerate,
+        max_evidence: int = 48,
+    ) -> str:
+        parts = [
+            await self.build_evidence_ai(work_id, character, llm_generate, max_evidence),
+            await self.build_persona_ai(work_id, character, phase, llm_generate, max_evidence),
+            await self.build_style_ai(work_id, character, llm_generate, max_evidence),
             self.export(work_id, character, "all", phase),
         ]
         return "\n\n".join(parts)
