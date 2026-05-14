@@ -54,6 +54,11 @@ class CharacterDistillerPipeline:
         if not paragraphs:
             raise RuntimeError("尚未切分文本，请先执行 /distill split")
         cards = self.evidence_extractor.build(work_id, character, paragraphs)
+        if not cards:
+            raise RuntimeError(
+                f"未在 {work_id} 中找到角色名「{character}」的证据段落；"
+                "请确认角色名写法，或重新导入原文后再 split。"
+            )
         char_file = safe_filename(character)
         out = base / "distilled" / f"evidence_cards_{char_file}.jsonl"
         self.workspace.write_jsonl(out, cards)

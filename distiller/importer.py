@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .utils import normalize_text, sha256_file, utc_now
+from .utils import normalize_text, read_text_auto, sha256_file, utc_now
 from ..storage.workspace import DistillerWorkspace
 
 
@@ -23,7 +23,7 @@ class TextImporter:
         normalized_path = base / "raw" / "normalized.txt"
 
         self.workspace.copy_source(source_path, original_path)
-        raw = original_path.read_text(encoding="utf-8-sig", errors="replace")
+        raw, source_encoding = read_text_auto(original_path)
         normalized = normalize_text(raw)
         normalized_path.write_text(normalized, encoding="utf-8")
 
@@ -35,6 +35,7 @@ class TextImporter:
             "original_path": str(original_path.relative_to(base)),
             "normalized_path": str(normalized_path.relative_to(base)),
             "source_hash": sha256_file(original_path),
+            "source_encoding": source_encoding,
             "created_at": utc_now(),
         }
         self.workspace.write_json(base / "raw" / "source_meta.json", meta)

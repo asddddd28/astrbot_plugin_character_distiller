@@ -24,6 +24,16 @@ def sha256_file(path) -> str:
     return "sha256:" + h.hexdigest()
 
 
+def read_text_auto(path) -> tuple[str, str]:
+    data = path.read_bytes()
+    for encoding in ("utf-8-sig", "utf-8", "gb18030", "gbk"):
+        try:
+            return data.decode(encoding), encoding
+        except UnicodeDecodeError:
+            continue
+    return data.decode("utf-8", errors="replace"), "utf-8-replace"
+
+
 def normalize_text(text: str) -> str:
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = text.replace("\u3000", " ")
