@@ -64,7 +64,8 @@ class CharacterDistillerPlugin(Star):
             )
             return
         try:
-            result = self.pipeline.import_text(title=title, source_path=Path(file_path))
+            clean_path = file_path.strip().strip("\"'“”‘’")
+            result = self.pipeline.import_text(title=title, source_path=Path(clean_path))
         except Exception as exc:
             logger.error("distill import failed: %s", exc, exc_info=True)
             event.set_result(MessageEventResult().message(f"导入失败：{exc}"))

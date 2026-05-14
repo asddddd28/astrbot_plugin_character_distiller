@@ -210,3 +210,8 @@ __marimo__/
 data/
 tmp*/
 .distill_test/
+
+# Node artifacts are not used by this Python AstrBot plugin
+node_modules/
+package.json
+package-lock.json

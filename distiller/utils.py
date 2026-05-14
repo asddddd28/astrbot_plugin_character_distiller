@@ -9,7 +9,7 @@ CHAPTER_RE = re.compile(
     r"^\s*(第[一二三四五六七八九十百千万零〇两\d]+[章节卷回幕].*|chapter\s+\d+.*|\d+[\.、]\s+.+)\s*$",
     re.IGNORECASE,
 )
-QUOTE_RE = re.compile(r"[“\"']([^“”\"']{1,240})[”\"']")
+QUOTE_RE = re.compile(r"[“\"'「『‘]([^“”\"'「」『』‘’]{1,240})[”\"'」』’]")
 
 
 def utc_now() -> str:
