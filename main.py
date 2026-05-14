@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import importlib
+import json
 from pathlib import Path
 
 from astrbot.api import logger
@@ -18,7 +20,7 @@ PLUGIN_NAME = "astrbot_plugin_character_distiller"
     PLUGIN_NAME,
     "asddd",
     "角色动态人格蒸馏器：导入文本、生成证据卡、人格 Prompt、语言指纹和记忆导出。",
-    "0.4.0",
+    "0.5.0",
 )
 class CharacterDistillerPlugin(Star):
     def __init__(self, context: Context, config=None):
@@ -247,13 +249,14 @@ class CharacterDistillerPlugin(Star):
         name: str = "",
         embedding_provider_id: str = "",
     ):
-        """写入 AstrBot：/distill apply persona|kb|all 角色A work_001 [名称] [embedding_provider_id]"""
-        if target not in {"persona", "kb", "all"} or not character or not work_id:
+        """写入 AstrBot：/distill apply persona|kb|memorix|all 角色A work_001 [名称] [embedding_provider_id]"""
+        if target not in {"persona", "kb", "memorix", "all"} or not character or not work_id:
             event.set_result(
                 MessageEventResult().message(
-                    "用法：/distill apply <persona|kb|all> <角色名> <work_id> [persona前缀或知识库名] [embedding_provider_id]\n"
+                    "用法：/distill apply <persona|kb|memorix|all> <角色名> <work_id> [名称或knowledge_type] [embedding_provider_id]\n"
                     "示例：/distill apply persona 世凪 work_004 世凪\n"
                     "示例：/distill apply kb 世凪 work_004 世凪原著知识库 openai_embedding\n"
+                    "示例：/distill apply memorix 世凪 work_004 structured\n"
                     "示例：/distill apply all 世凪 work_004 世凪原著知识库 openai_embedding"
                 )
             )
@@ -266,6 +269,9 @@ class CharacterDistillerPlugin(Star):
             if target in {"kb", "all"}:
                 kb_name = name or f"{character}原著知识库"
                 outputs.append(await self._apply_knowledge_base(character, work_id, kb_name, embedding_provider_id))
+            if target in {"memorix", "all"}:
+                knowledge_type = name if target == "memorix" and name else self._memorix_knowledge_type()
+                outputs.append(await self._apply_memorix(event, character, work_id, knowledge_type))
         except Exception as exc:
             logger.error("distill apply failed: %s", exc, exc_info=True)
             event.set_result(MessageEventResult().message(f"写入 AstrBot 失败：{exc}"))
@@ -415,6 +421,189 @@ class CharacterDistillerPlugin(Star):
             f"chunks：{len(chunks)}"
         )
 
+    async def _apply_memorix(
+        self,
+        event: AstrMessageEvent,
+        character: str,
+        work_id: str,
+        knowledge_type: str,
+    ) -> str:
+        payload = self._build_memorix_payload(character, work_id, knowledge_type)
+        import_path = self._write_memorix_import_file(character, work_id, payload)
+
+        if not self._enable_memorix_direct_write():
+            return (
+                "Memorix 直接写入未启用，已生成导入文件：\n"
+                f"{import_path}\n"
+                "可在 Memorix 导入中心启用后导入该 JSON。"
+            )
+
+        try:
+            memorix = self._find_memorix_plugin()
+            if not memorix:
+                raise RuntimeError("当前 AstrBot 未加载 astrbot_plugin_memorix")
+            runtime_manager = getattr(memorix, "runtime_manager", None)
+            if not runtime_manager:
+                raise RuntimeError("Memorix 插件未暴露 runtime_manager")
+
+            if hasattr(memorix, "_resolve_scope"):
+                scope_key = memorix._resolve_scope(event)
+            else:
+                scope_key = getattr(event, "unified_msg_origin", "") or "default"
+
+            runtime = await runtime_manager.get_runtime(scope_key)
+            import_service_cls = self._memorix_import_service_class()
+            result = await import_service_cls(runtime.context).import_json(payload)
+        except Exception as exc:
+            logger.warning("memorix direct write failed: %s", exc, exc_info=True)
+            return (
+                "Memorix 直接写入失败，已生成可导入 JSON：\n"
+                f"{import_path}\n"
+                f"原因：{exc}\n"
+                "处理方式：在 Memorix 配置中启用 web.import.enabled=true 后，打开 /mem ui 的导入中心导入该文件；"
+                "或使用 raw/plugin_data 扫描此目录。"
+            )
+
+        hashes = result.get("hashes", []) if isinstance(result, dict) else []
+        return (
+            "Memorix 写入完成：\n"
+            f"scope：{scope_key}\n"
+            f"paragraphs：{len(payload.get('paragraphs', []))}\n"
+            f"hashes：{len(hashes)}\n"
+            f"备份导入文件：{import_path}"
+        )
+
+    def _build_memorix_payload(self, character: str, work_id: str, knowledge_type: str) -> dict:
+        base = self.workspace.require_work_dir(work_id)
+        char_file = safe_filename(character)
+        if not (base / "exports").exists():
+            self.pipeline.export_package(work_id, character)
+
+        paragraphs = []
+        source = f"character_distiller:{work_id}:{character}"
+
+        persona_paths = sorted((base / "distilled").glob(f"persona_card_{char_file}_*.json"))
+        for path in persona_paths:
+            persona = json.loads(path.read_text(encoding="utf-8"))
+            phase = str(persona.get("phase") or path.stem.replace(f"persona_card_{char_file}_", "", 1))
+            paragraphs.append(
+                {
+                    "content": self._memorix_persona_text(character, phase, persona),
+                    "source": f"{source}:persona:{phase}",
+                    "knowledge_type": knowledge_type,
+                }
+            )
+
+        knowledge_path = base / "distilled" / f"knowledge_cards_{char_file}.jsonl"
+        for row in self._read_jsonl(knowledge_path):
+            title = row.get("title") or row.get("claim") or row.get("id") or "knowledge"
+            paragraphs.append(
+                {
+                    "content": "[角色知识]\n" + json.dumps(row, ensure_ascii=False, indent=2),
+                    "source": f"{source}:knowledge:{title}",
+                    "knowledge_type": knowledge_type,
+                }
+            )
+
+        evidence_path = base / "distilled" / f"evidence_cards_{char_file}.jsonl"
+        for row in self._read_jsonl(evidence_path):
+            evidence_id = row.get("id") or row.get("evidence_id") or len(paragraphs) + 1
+            paragraphs.append(
+                {
+                    "content": "[原文证据]\n" + json.dumps(row, ensure_ascii=False, indent=2),
+                    "source": f"{source}:evidence:{evidence_id}",
+                    "knowledge_type": knowledge_type,
+                }
+            )
+
+        style_path = base / "distilled" / f"speech_fingerprint_{char_file}.json"
+        if style_path.exists():
+            style = json.loads(style_path.read_text(encoding="utf-8"))
+            paragraphs.append(
+                {
+                    "content": "[语言指纹]\n" + json.dumps(style, ensure_ascii=False, indent=2),
+                    "source": f"{source}:style",
+                    "knowledge_type": knowledge_type,
+                }
+            )
+
+        if not paragraphs:
+            self.pipeline.export_package(work_id, character)
+            memorix_paths = sorted((base / "exports").glob(f"memorix_export_{char_file}_*.json"))
+            for path in memorix_paths:
+                rows = json.loads(path.read_text(encoding="utf-8"))
+                for idx, row in enumerate(rows, start=1):
+                    paragraphs.append(
+                        {
+                            "content": "[Memorix导出]\n" + json.dumps(row, ensure_ascii=False, indent=2),
+                            "source": f"{source}:memorix:{path.stem}:{idx}",
+                            "knowledge_type": knowledge_type,
+                        }
+                    )
+
+        if not paragraphs:
+            raise RuntimeError("没有找到可写入 Memorix 的蒸馏产物，请先执行 /distill export-package")
+        return {"paragraphs": paragraphs, "relations": []}
+
+    def _memorix_persona_text(self, character: str, phase: str, persona: dict) -> str:
+        keys = [
+            "surface_traits",
+            "deep_motivation",
+            "core_conflicts",
+            "trigger_conditions",
+            "expression_patterns",
+            "behavior_rules",
+            "anti_drift_rules",
+            "evidence_ids",
+        ]
+        lines = [f"[角色人格]\ncharacter={character}\nphase={phase}"]
+        for key in keys:
+            value = persona.get(key)
+            if value:
+                lines.append(f"{key}={json.dumps(value, ensure_ascii=False)}")
+        return "\n".join(lines)
+
+    def _read_jsonl(self, path: Path) -> list[dict]:
+        if not path.exists():
+            return []
+        rows = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line:
+                rows.append(json.loads(line))
+        return rows
+
+    def _write_memorix_import_file(self, character: str, work_id: str, payload: dict) -> Path:
+        base = self.workspace.require_work_dir(work_id)
+        char_file = safe_filename(character)
+        target_dir = base / "rag_export" / "memorix_import" / char_file
+        target_dir.mkdir(parents=True, exist_ok=True)
+        path = target_dir / f"memorix_import_{char_file}_{work_id}.json"
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        return path
+
+    def _find_memorix_plugin(self):
+        stars = self.context.get_all_stars() if hasattr(self.context, "get_all_stars") else []
+        for meta in stars:
+            name = str(getattr(meta, "name", "") or getattr(meta, "star_name", "") or "")
+            module = str(getattr(getattr(meta, "star_cls", None), "__module__", ""))
+            if "memorix" in name.lower() or "memorix" in module.lower():
+                return getattr(meta, "star_cls", None)
+        if hasattr(self.context, "get_registered_star"):
+            meta = self.context.get_registered_star("astrbot_plugin_memorix")
+            if meta:
+                return getattr(meta, "star_cls", None)
+        return None
+
+    def _memorix_import_service_class(self):
+        try:
+            module = importlib.import_module(
+                "astrbot_plugin_memorix.memorix.amemorix.services.import_service"
+            )
+        except ModuleNotFoundError:
+            module = importlib.import_module("memorix.amemorix.services.import_service")
+        return module.ImportService
+
     def _persona_skills(self) -> list[str] | None:
         value = self.config.get("application", {}).get(
             "persona_skills",
@@ -426,6 +615,12 @@ class CharacterDistillerPlugin(Star):
 
     def _default_embedding_provider_id(self) -> str:
         return str(self.config.get("application", {}).get("default_embedding_provider_id", ""))
+
+    def _enable_memorix_direct_write(self) -> bool:
+        return bool(self.config.get("application", {}).get("enable_memorix_direct_write", True))
+
+    def _memorix_knowledge_type(self) -> str:
+        return str(self.config.get("application", {}).get("memorix_knowledge_type", "structured"))
 
     async def _llm_generate(self, event: AstrMessageEvent):
         if not self.config.get("provider", {}).get("enable_ai_distillation", True):
@@ -461,7 +656,7 @@ class CharacterDistillerPlugin(Star):
             "/distill style build <角色名> <work_id>  # 有 Provider 时使用 AI 分析语言指纹\n"
             "/distill export <persona|memorix|angel|kb|all> <角色名> <work_id> [phase|auto]\n"
             "/distill export-package <角色名> <work_id>  # 导出所有阶段 Persona/KB/Memorix/Angel\n"
-            "/distill apply <persona|kb|all> <角色名> <work_id> [名称] [embedding_provider_id]  # 写入 AstrBot Persona/KB\n"
+            "/distill apply <persona|kb|memorix|all> <角色名> <work_id> [名称或knowledge_type] [embedding_provider_id]  # 写入 Persona/KB/Memorix\n"
             "/distill run <角色名> <work_id> [phase|auto]  # AI 证据+人格+语言指纹+导出\n"
             "/distill status [work_id]\n\n"
             f"数据目录：{self.workspace.root}"

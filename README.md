@@ -98,6 +98,8 @@ AstrBot 会读取插件根目录的 `_conf_schema.json` 并生成插件配置。
 | --- | --- | --- |
 | `default_embedding_provider_id` | `""` | 创建 AstrBot Knowledge Base 时使用的 Embedding Provider ID。留空时需要在 `/distill apply kb/all` 命令末尾传入。 |
 | `persona_skills` | `"evidence-reviewer,persona-distiller,style-fingerprint,knowledge-distiller"` | 写入 AstrBot Persona 时绑定的 Skills，多个用英文逗号分隔。 |
+| `enable_memorix_direct_write` | `true` | `/distill apply memorix/all` 时直接调用已加载的 Memorix 插件写入当前作用域。关闭后只生成导入 JSON。 |
+| `memorix_knowledge_type` | `"structured"` | 写入 Memorix 时使用的 `knowledge_type`。可选 `auto`、`factual`、`narrative`、`structured`、`mixed`，角色蒸馏结果建议 `structured`。 |
 
 ## 命令
 
@@ -112,7 +114,7 @@ AstrBot 会读取插件根目录的 `_conf_schema.json` 并生成插件配置。
 /distill style build <角色名> <work_id>
 /distill export <persona|memorix|angel|kb|all> <角色名> <work_id> [phase|auto]
 /distill export-package <角色名> <work_id>
-/distill apply <persona|kb|all> <角色名> <work_id> [名称] [embedding_provider_id]
+/distill apply <persona|kb|memorix|all> <角色名> <work_id> [名称或knowledge_type] [embedding_provider_id]
 /distill run <角色名> <work_id> [phase|auto]
 ```
 
@@ -124,7 +126,8 @@ AstrBot 会读取插件根目录的 `_conf_schema.json` 并生成插件配置。
 - `export-package` 会对所有阶段人格卡生成完整 Persona/KB/Memorix/Angel 导出包。
 - `apply persona` 会把导出的 Persona Prompt 写入 AstrBot Persona。
 - `apply kb` 会把 KB Markdown 写入 AstrBot Knowledge Base，并触发向量化。
-- `apply all` 会同时写入 Persona 和 Knowledge Base。
+- `apply memorix` 会把人格、知识卡、证据卡和语言指纹写入已加载的 Memorix 当前作用域。
+- `apply all` 会同时写入 Persona、Knowledge Base 和 Memorix。
 - 在 AI 蒸馏模式下，`evidence`、`persona`、`style`、`run` 会调用 AstrBot LLM Provider。
 - 在没有可用 Provider 时，插件会回退到规则模式。
 
@@ -161,9 +164,9 @@ AstrBot 会读取插件根目录的 `_conf_schema.json` 并生成插件配置。
 /distill export-package 世凪 work_003
 ```
 
-### 写入 AstrBot Persona / Knowledge Base
+### 写入 AstrBot Persona / Knowledge Base / Memorix
 
-导出完成后，文件还只是插件产物。要让 AstrBot 运行时使用，需要显式写入 AstrBot 的 Persona 或 Knowledge Base。
+导出完成后，文件还只是插件产物。要让 AstrBot 运行时使用，需要显式写入 AstrBot 的 Persona、Knowledge Base 或 Memorix。
 
 写入 Persona：
 
@@ -194,10 +197,32 @@ AstrBot 会读取插件根目录的 `_conf_schema.json` 并生成插件配置。
 /distill apply all 世凪 work_004 世凪原著知识库 <embedding_provider_id>
 ```
 
+写入 Memorix：
+
+```text
+/distill apply memorix 世凪 work_004 structured
+```
+
+Memorix 写入会优先调用已加载的 `astrbot_plugin_memorix` 内部导入服务，写入当前会话所在的 Memorix scope。写入内容包括：
+
+- 阶段人格卡：每个阶段一条结构化记忆。
+- 知识卡：用于长期事实与设定检索。
+- 证据卡：保留可追溯原文依据。
+- 语言指纹：用于保持角色说话方式。
+
+如果 Memorix 未安装、未启用或内部接口不可用，插件不会丢弃结果，而是生成：
+
+```text
+works/<work_id>/rag_export/memorix_import/<角色>/memorix_import_<角色>_<work_id>.json
+```
+
+此时可以在 Memorix 配置中启用 `web.import.enabled=true`，通过 `/mem ui` 打开导入中心后导入该 JSON；也可以使用 Memorix 的 raw/plugin_data 扫描导入这个目录。
+
 注意：
 
 - Knowledge Base 写入会调用 Embedding Provider 生成向量，可能产生模型调用成本。
-- Memorix 和 Angel Memory 目前仍以 JSON 导出文件形式提供，因为它们不是 AstrBot 核心接口；建议在对应插件中导入 `exports/` 下的 JSON。
+- Memorix 直接写入依赖 Memorix 插件已在 AstrBot 中加载；没有加载时会退回到导入 JSON。
+- Angel Memory 目前仍以 JSON 导出文件形式提供，建议在对应插件中导入 `exports/` 下的 JSON。
 - HAPI 出现不明命令，例如 `command=a`，不要批准。应使用上面的 `/distill apply ...` 显式命令。
 
 成功使用 AI 蒸馏时，响应中会出现类似：
@@ -318,6 +343,7 @@ repo: https://github.com/asddddd28/astrbot_plugin_character_distiller
 
 ## 版本
 
+- `v0.5.0`：新增 `/distill apply memorix`，支持直接写入已加载的 Memorix 当前作用域，并提供导入 JSON 降级路径。
 - `v0.4.0`：新增 `/distill apply`，支持把导出结果写入 AstrBot Persona 和 Knowledge Base。
 - `v0.3.0`：新增外部蒸馏 JSON 导入、完整导出包、导出编排 Skill，以及 1-6 级蒸馏精细度设置。
 - `v0.2.0`：接入 AstrBot LLM Provider，支持 AI 证据提取、人格蒸馏和语言指纹分析；修复中文旧编码导入；补充插件更新元数据。

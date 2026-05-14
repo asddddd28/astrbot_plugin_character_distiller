@@ -70,6 +70,16 @@
         "description": "写入 AstrBot Persona 时绑定的 Skills，多个用英文逗号分隔。留空表示使用 AstrBot 默认行为。",
         "type": "string",
         "default": "evidence-reviewer,persona-distiller,style-fingerprint,knowledge-distiller"
+      },
+      "enable_memorix_direct_write": {
+        "description": "启用 /distill apply memorix/all 时直接调用已加载的 Memorix 插件写入当前作用域。关闭后仅生成 Memorix 导入 JSON。",
+        "type": "bool",
+        "default": true
+      },
+      "memorix_knowledge_type": {
+        "description": "写入 Memorix 时使用的 knowledge_type，可选 auto/factual/narrative/structured/mixed；角色蒸馏结果建议 structured。",
+        "type": "string",
+        "default": "structured"
       }
     }
   },
