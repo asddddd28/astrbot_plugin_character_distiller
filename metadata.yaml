@@ -1,6 +1,6 @@
 name: astrbot_plugin_character_distiller
 display_name: 角色动态人格蒸馏器
-desc: 从 txt/md 语料导入、切分、生成证据卡、人格卡、语言指纹与 AstrBot Persona/Memorix/Angel Memory/KB 导出文件。
-version: v0.1.0
+desc: 从 txt/md 语料导入、切分，并借助 AstrBot LLM Provider 生成证据卡、人格卡、语言指纹与 Persona/Memorix/Angel Memory/KB 导出文件。
+version: v0.2.0
 author: asddd
-repo: ""
+repo: https://github.com/asddddd28/astrbot_plugin_character_distiller
