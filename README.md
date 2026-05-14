@@ -1,6 +1,6 @@
 # AstrBot 角色动态人格蒸馏器
 
-`astrbot_plugin_character_distiller` 是一个面向 AstrBot 的角色语料蒸馏插件。它可以把 txt/md 小说、剧本、设定集或角色语料导入为可追溯的本地语料库，再生成证据卡、阶段人格卡、语言指纹，以及可供 AstrBot Persona、Knowledge Base、Memorix、Angel Memory 使用的导出文件。
+`astrbot_plugin_character_distiller` 是一个面向 AstrBot 的角色语料蒸馏插件。它可以把 txt/md 小说、剧本、设定集或角色语料导入为可追溯的本地语料库，再生成证据卡、阶段人格卡、语言指纹，以及可供 AstrBot Persona、Knowledge Base、Memorix使用的导出文件。
 
 当前版本支持两种模式：
 
