@@ -1,0 +1,1711 @@
+# AstrBot 角色动态人格蒸馏器架构与构建流程
+
+## 0. 项目定位
+
+这个插件不建议做成一个简单的“角色设定生成器”，而应设计成一个 **角色动态人格蒸馏系统**。
+
+它的目标不是把小说总结成几条“阳光、傲娇、冷静、热心”等性格词，而是从大量原文中构建一个可运行、可追溯、可阶段化、可检索、可持续修正的角色模型。
+
+核心目标：
+
+```text
+原始文本
+  ↓
+高保真语料保存
+  ↓
+章节 / 场景 / 对话 / 心理描写 / 行为事件索引
+  ↓
+证据卡 Evidence Cards
+  ↓
+动态人格模型 Dynamic Persona Model
+  ↓
+AstrBot Persona / Knowledge Base / Memorix / Angel Memory / Self-Evolution
+  ↓
+运行时稳定扮演 + 记忆召回 + 人格弧线演化
+```
+
+系统最终应该能回答这些问题：
+
+```text
+这个角色在故事前期、中期、后期分别是什么状态？
+这个角色在什么情况下会改变语气？
+这个角色说话有什么固定句式和表达策略？
+这个角色的表面语言和真实心理是否存在差异？
+这个人格判断来自哪些原文证据？
+有没有反例？
+对话时应该调用哪些人格规则和原文样本？
+运行过程中产生的新记忆是否会污染原著人格？
+```
+
+---
+
+## 1. 总体架构
+
+推荐插件名：
+
+```text
+astrbot_plugin_character_distiller
+```
+
+整体分为七层：
+
+```text
+┌─────────────────────────────────────┐
+│ 1. Source Layer 原始文本层            │
+│ 小说、剧本、设定集、聊天记录、角色语料 │
+└──────────────────┬──────────────────┘
+                   ↓
+┌─────────────────────────────────────┐
+│ 2. Corpus Vault 高保真语料库          │
+│ 原文、章节、段落、台词、场景、hash     │
+└──────────────────┬──────────────────┘
+                   ↓
+┌─────────────────────────────────────┐
+│ 3. RAG / Retrieval 检索层             │
+│ Knowledge Base、Memorix、SQLite FTS5  │
+└──────────────────┬──────────────────┘
+                   ↓
+┌─────────────────────────────────────┐
+│ 4. Distillation 蒸馏层                │
+│ 人格、语言、心理、关系、知识、反证     │
+└──────────────────┬──────────────────┘
+                   ↓
+┌─────────────────────────────────────┐
+│ 5. Character Model 角色模型层         │
+│ 人格卡、阶段人格、语言指纹、关系图谱   │
+└──────────────────┬──────────────────┘
+                   ↓
+┌─────────────────────────────────────┐
+│ 6. Runtime Integration 运行时集成层   │
+│ Persona、Self-Evolution、Memory 插件  │
+└──────────────────┬──────────────────┘
+                   ↓
+┌─────────────────────────────────────┐
+│ 7. Evaluation & Review 评估审核层     │
+│ 证据追踪、反跑偏测试、人工审核         │
+└─────────────────────────────────────┘
+```
+
+一句话概括：
+
+```text
+Knowledge Base / RAG 负责找材料；
+人格蒸馏器负责理解和建模；
+Persona 负责常驻人格；
+Memorix / Angel Memory 负责长期记忆；
+Self-Evolution 负责运行时状态和人格弧线；
+Corpus Vault 负责高保真原文追溯。
+```
+
+---
+
+## 2. 各插件和系统的分工
+
+### 2.1 AstrBot Knowledge Base
+
+适合定位：**原文证据库 / 设定集检索库**。
+
+推荐存放：
+
+```text
+小说章节
+场景片段
+角色对话样本
+世界观设定
+官方资料
+角色访谈
+```
+
+不建议直接把整本小说作为一个大文件丢进去就结束。更好的做法是：
+
+```text
+按作品 → 阶段 → 章节 → 场景 切分成 md 文件；
+每个文件头部加 metadata；
+每个场景保留 chapter、phase、characters、scene、type 信息。
+```
+
+示例：
+
+```markdown
+# 第十二章 雨夜争执
+
+metadata:
+- work: xxx
+- chapter: 12
+- phase: middle
+- characters: 角色A, 角色B
+- scene: 雨夜争执
+- type: dialogue+narration
+
+## 正文
+……
+```
+
+Knowledge Base 主要作用不是人格建模，而是让蒸馏器能稳定召回原文证据。
+
+---
+
+### 2.2 Memorix
+
+适合定位：**长期记忆 + 图谱 + 可追溯记忆管理**。
+
+推荐存放：
+
+```text
+蒸馏后的人格规则
+角色阶段总结
+角色关系记忆
+用户与角色的互动记忆
+事件时间线摘要
+高置信知识卡
+```
+
+不建议让 Memorix 直接承担“从整本小说自动理解人格”的全部任务。它更适合作为蒸馏结果的长期记忆容器。
+
+重要注意点：
+
+```text
+原著核心人格、世界观设定、关键关系应该设置为 protected / canon 类型；
+运行时聊天记忆可以衰减、强化、冻结、恢复；
+原著人格不能因为日常对话而被自动覆盖。
+```
+
+推荐标签：
+
+```text
+canon
+persona
+character:角色名
+phase:early / middle / late / post_end
+speech_style
+relationship
+worldbuilding
+protected
+```
+
+---
+
+### 2.3 Angel Memory
+
+适合定位：**短条目核心记忆 / 主动记忆 / 角色认知层**。
+
+推荐存放：
+
+```text
+100 字以内的人格短记忆
+角色稳定行为规则
+重要关系判断
+世界观短知识
+用户关系摘要
+```
+
+不推荐：
+
+```text
+整本小说
+整章原文
+超长 PDF
+大段连续原文
+几百万字未加工语料
+```
+
+Angel Memory 更适合保存“已经蒸馏好的短记忆”，例如：
+
+```json
+{
+  "judgment": "角色A在中期阶段面对重要同伴受伤时，会用责备掩盖担心，但会立即采取实际照顾行为。",
+  "reasoning": "多个中期场景显示其语言上责备、行动上保护。",
+  "tags": ["persona:角色A", "phase:middle", "behavior:责备式关心"],
+  "strength": 90,
+  "memory_type": "persona"
+}
+```
+
+---
+
+### 2.4 Self-Evolution
+
+适合定位：**运行时人格模拟 + 人格弧线 + 主动社交 + 反思**。
+
+推荐承担：
+
+```text
+当前心情
+当前能量
+当前社交需求
+最近对话状态
+人格阶段 progress
+主动续聊
+用户关系变化
+日结反思
+```
+
+不建议承担：
+
+```text
+解析百万字小说
+识别角色台词归属
+构建原著证据链
+自动重写原著核心人格
+```
+
+最佳用法：
+
+```text
+蒸馏器输出 timeline_persona.json；
+适配器把 timeline_persona.json 转成 Persona Arc Profile；
+Self-Evolution 负责运行时阶段推进和当前状态注入。
+```
+
+关键原则：
+
+```text
+原著人格不可自动改写；
+运行时情绪和关系可以演化；
+人格补丁必须有证据和审核。
+```
+
+---
+
+### 2.5 AstrBot Persona
+
+适合定位：**常驻人格基底**。
+
+推荐写入：
+
+```text
+角色身份
+核心人格机制
+语言风格规则
+行为边界
+反跑偏规则
+基础 begin_dialogs
+```
+
+不推荐写入：
+
+```text
+整本故事情节
+大量原文引用
+所有事件记忆
+所有关系细节
+大量知识条目
+```
+
+Persona 应该短而稳定，记忆细节通过 RAG / Memorix / Angel Memory 按需召回。
+
+---
+
+## 3. 插件目录设计
+
+推荐目录：
+
+```text
+astrbot_plugin_character_distiller/
+  metadata.yaml
+  main.py
+  _conf_schema.json
+  requirements.txt
+  README.md
+
+  skills/
+    persona-distiller/
+      SKILL.md
+    knowledge-distiller/
+      SKILL.md
+    evidence-reviewer/
+      SKILL.md
+    style-fingerprint/
+      SKILL.md
+
+  distiller/
+    __init__.py
+    importer.py
+    normalizer.py
+    splitter.py
+    speaker_detector.py
+    scene_builder.py
+    evidence_extractor.py
+    persona_extractor.py
+    speech_extractor.py
+    psychology_extractor.py
+    relationship_extractor.py
+    knowledge_extractor.py
+    phase_builder.py
+    verifier.py
+    evaluator.py
+
+  storage/
+    __init__.py
+    db.py
+    models.py
+    corpus_store.py
+    evidence_store.py
+    export_store.py
+
+  rag/
+    __init__.py
+    kb_adapter.py
+    memorix_adapter.py
+    angel_memory_adapter.py
+    local_fts.py
+    rerank.py
+
+  runtime/
+    __init__.py
+    persona_writer.py
+    self_evolution_adapter.py
+    memory_writer.py
+    prompt_builder.py
+    injection_policy.py
+
+  pages/
+    dashboard/
+      index.html
+      app.js
+      style.css
+    review/
+      index.html
+      app.js
+      style.css
+
+  data_templates/
+    persona_card.schema.json
+    evidence_card.schema.json
+    knowledge_card.schema.json
+    timeline_persona.schema.json
+```
+
+实际持久化数据不要放在插件代码目录，而应放到 AstrBot 的插件数据目录，例如：
+
+```text
+AstrBot/data/plugin_data/character_distiller/
+  corpus/
+  db/
+  indexes/
+  exports/
+  logs/
+  review_queue/
+```
+
+推荐真实数据结构：
+
+```text
+data/plugin_data/character_distiller/
+  works/
+    work_001/
+      raw/
+        original.txt
+        normalized.txt
+        source_meta.json
+      index/
+        chapters.jsonl
+        paragraphs.jsonl
+        scenes.jsonl
+        utterances.jsonl
+        character_mentions.jsonl
+      db/
+        corpus.sqlite
+      rag_export/
+        kb_chunks/
+        memorix_import/
+        angel_memory_import/
+      distilled/
+        evidence_cards.jsonl
+        persona_claims.jsonl
+        speech_fingerprint.json
+        timeline_persona.json
+        relationship_graph.json
+        knowledge_cards.jsonl
+      exports/
+        astrbot_persona_prompt.txt
+        self_evolution_arc.py
+        angel_memory_export.json
+        memorix_export.json
+      eval/
+        eval_report_latest.json
+```
+
+---
+
+## 4. 核心数据模型
+
+### 4.1 Work 作品
+
+```json
+{
+  "work_id": "work_001",
+  "title": "作品名",
+  "author": "作者",
+  "source_type": "novel",
+  "language": "zh",
+  "original_path": "raw/original.txt",
+  "normalized_path": "raw/normalized.txt",
+  "source_hash": "sha256:xxxx",
+  "created_at": "2026-05-13T20:00:00+09:00"
+}
+```
+
+---
+
+### 4.2 Chapter 章节
+
+```json
+{
+  "chapter_id": "work001_ch012",
+  "work_id": "work_001",
+  "chapter_index": 12,
+  "title": "第十二章 雨夜",
+  "char_start": 120000,
+  "char_end": 135000,
+  "phase": "middle",
+  "summary": "角色A与角色B在雨夜争执，之后出现隐含关心行为。"
+}
+```
+
+---
+
+### 4.3 Scene 场景
+
+```json
+{
+  "scene_id": "work001_ch012_s03",
+  "chapter_id": "work001_ch012",
+  "phase": "middle",
+  "characters": ["角色A", "角色B"],
+  "location": "废弃车站",
+  "event_type": ["争执", "受伤", "照顾"],
+  "emotion_tags": ["压抑", "担心", "嘴硬"],
+  "paragraph_ids": ["p034", "p035", "p036"],
+  "summary": "角色A表面责备角色B鲁莽，随后替其处理伤口。"
+}
+```
+
+---
+
+### 4.4 Utterance 台词
+
+```json
+{
+  "utterance_id": "work001_ch012_s03_u018",
+  "speaker": "角色A",
+  "listener": "角色B",
+  "phase": "middle",
+  "text": "你还真是不怕死。",
+  "emotion": "担心但掩饰",
+  "speech_act": "责备式关心",
+  "relationship_context": "重要同伴",
+  "scene_id": "work001_ch012_s03"
+}
+```
+
+---
+
+### 4.5 Evidence Card 证据卡
+
+```json
+{
+  "evidence_id": "ev_work001_ch012_s03_001",
+  "character": "角色A",
+  "phase": "middle",
+  "claim_type": "behavior_pattern",
+  "claim": "面对重要同伴受伤时，角色A倾向于用责备掩盖担心。",
+  "evidence_text_summary": "角色A先责备角色B鲁莽，随后主动处理伤口。",
+  "source_refs": [
+    {
+      "chapter_id": "work001_ch012",
+      "scene_id": "work001_ch012_s03",
+      "paragraph_ids": ["p034", "p035", "p036"]
+    }
+  ],
+  "confidence": 0.88,
+  "counter_evidence": []
+}
+```
+
+---
+
+### 4.6 Persona Claim 人格判断
+
+```json
+{
+  "claim_id": "pc_roleA_middle_001",
+  "character": "角色A",
+  "phase": "middle",
+  "surface_trait": "嘴硬",
+  "deep_mechanism": "越担心重要对象，越不愿直接承认关心，倾向于用责备和行动替代表达。",
+  "trigger_conditions": [
+    "重要同伴受伤",
+    "对方冒险",
+    "自己情绪暴露风险较高"
+  ],
+  "expression_patterns": [
+    "先责备",
+    "转移话题",
+    "用行动处理问题"
+  ],
+  "evidence_ids": ["ev_work001_ch012_s03_001", "ev_work001_ch018_s02_002"],
+  "counter_evidence_ids": [],
+  "confidence": 0.91
+}
+```
+
+---
+
+### 4.7 Speech Fingerprint 语言指纹
+
+```json
+{
+  "character": "角色A",
+  "phase": "middle",
+  "default_tone": "冷淡、克制、轻微讽刺",
+  "sentence_length": "中短句为主，情绪激动时句子变短",
+  "common_moves": [
+    "用反问代替直接回答",
+    "先否认关心，再给出实际帮助",
+    "受到感谢时转移话题"
+  ],
+  "emotion_variants": {
+    "worried": "语速变快，责备增多，但行动更主动",
+    "hurt": "句子变短，回避解释",
+    "trusting": "讽刺减少，但仍保持克制"
+  },
+  "forbidden_style": [
+    "不要过度卖萌",
+    "不要无条件温柔顺从",
+    "不要频繁长篇解释内心"
+  ]
+}
+```
+
+---
+
+### 4.8 Timeline Persona 阶段人格
+
+```json
+{
+  "character": "角色A",
+  "versions": [
+    {
+      "phase": "early",
+      "chapter_range": "第1章-第20章",
+      "dominant_state": "防备、疏离、试探他人",
+      "core_conflict": "渴望理解但害怕暴露脆弱",
+      "speech_style_ref": "speech_roleA_early",
+      "persona_claim_refs": ["pc_roleA_early_001"]
+    },
+    {
+      "phase": "middle",
+      "chapter_range": "第21章-第70章",
+      "dominant_state": "开始信任少数同伴，但不愿承认依赖",
+      "core_conflict": "依赖感增强与自我防御并存",
+      "speech_style_ref": "speech_roleA_middle",
+      "persona_claim_refs": ["pc_roleA_middle_001"]
+    }
+  ]
+}
+```
+
+---
+
+## 5. 构建流程
+
+### 阶段 1：文本导入
+
+命令示例：
+
+```text
+/distill import --title 作品名 --file novel.txt
+```
+
+执行内容：
+
+```text
+1. 保存原始文件 original.txt。
+2. 计算 sha256，保证可追溯。
+3. 生成 normalized.txt。
+4. 统一编码为 UTF-8。
+5. 标准化换行、章节标题、空白字符。
+6. 写入 source_meta.json。
+```
+
+注意事项：
+
+```text
+original.txt 永远不要覆盖；
+所有二次处理都基于 normalized.txt；
+每次重新导入都要记录 hash 和版本；
+不要把原始文件存到插件代码目录。
+```
+
+---
+
+### 阶段 2：结构切分
+
+命令示例：
+
+```text
+/distill split work_001
+```
+
+切分层级：
+
+```text
+作品 Work
+  └── 章节 Chapter
+        └── 场景 Scene
+              └── 段落 Paragraph
+                    └── 台词 Utterance
+```
+
+优先级：
+
+```text
+1. 先按章节标题切。
+2. 再按场景转换切。
+3. 再按自然段切。
+4. 最后识别台词。
+```
+
+场景切分依据：
+
+```text
+地点变化
+时间变化
+参与人物变化
+事件目标变化
+叙事节奏变化
+```
+
+---
+
+### 阶段 3：角色识别和台词归属
+
+命令示例：
+
+```text
+/distill characters detect work_001
+/distill speaker resolve work_001 --character 角色A
+```
+
+需要处理：
+
+```text
+角色别名
+昵称
+称呼变化
+旁白中的代词
+多人对话中的说话人归属
+心理描写归属
+```
+
+注意事项：
+
+```text
+台词归属不要完全相信模型；
+应该保存 confidence；
+低置信台词进入人工审核；
+关键角色的语言风格样本必须人工抽查。
+```
+
+---
+
+### 阶段 4：RAG 数据生成
+
+命令示例：
+
+```text
+/distill rag export work_001 --target kb
+/distill rag export work_001 --target memorix
+```
+
+Knowledge Base 推荐输入格式：
+
+```markdown
+# evidence_id: ev_work001_ch012_s03_001
+
+metadata:
+- work: 作品名
+- chapter: 12
+- phase: middle
+- characters: 角色A, 角色B
+- speaker: 角色A
+- listener: 角色B
+- emotion: 担心但掩饰
+- speech_act: 责备式关心
+- type: dialogue+narration
+
+正文片段：
+……
+```
+
+Memorix 推荐输入：
+
+```json
+{
+  "text": "角色A在中期阶段面对重要同伴受伤时，会用责备掩盖担心，但会采取实际照顾行为。",
+  "knowledge_type": "structured",
+  "tags": ["canon", "persona", "character:角色A", "phase:middle", "protected"]
+}
+```
+
+Angel Memory 推荐输入：
+
+```json
+{
+  "judgment": "角色A在中期阶段面对重要同伴受伤时，会用责备掩盖担心。",
+  "reasoning": "多处中期场景支持该模式。",
+  "tags": ["persona:角色A", "phase:middle", "canon"],
+  "strength": 90,
+  "memory_type": "persona"
+}
+```
+
+---
+
+### 阶段 5：证据卡抽取
+
+命令示例：
+
+```text
+/distill evidence build --character 角色A --work work_001
+```
+
+抽取维度：
+
+```text
+行为模式
+语言模式
+心理机制
+价值观
+目标和恐惧
+关系变化
+阶段变化
+反跑偏证据
+世界观知识
+```
+
+每张证据卡都必须包含：
+
+```text
+evidence_id
+角色名
+阶段 phase
+结论 claim
+原文位置
+上下文范围
+置信度
+反证候选
+```
+
+注意事项：
+
+```text
+不要直接从单段文本生成强人格结论；
+一个人格规则至少需要多个证据支持；
+孤例只能作为候选，不应进入核心 persona；
+必须保存反证。
+```
+
+---
+
+### 阶段 6：人格蒸馏
+
+命令示例：
+
+```text
+/distill persona build --character 角色A --phase auto
+```
+
+内部子任务：
+
+```text
+1. 人格机制蒸馏
+2. 语言风格蒸馏
+3. 心理活动蒸馏
+4. 行为规则蒸馏
+5. 关系模式蒸馏
+6. 阶段人格蒸馏
+7. 反跑偏规则蒸馏
+```
+
+不要输出这种低精度结果：
+
+```text
+角色A：阳光、自信、热心、温柔。
+```
+
+应该输出：
+
+```text
+角色A在公开场合倾向于用轻松语气稳定他人情绪；
+但在独处或失败导致他人受伤后，会出现强烈自责；
+他不直接表达恐惧，而是转化为行动承诺。
+```
+
+---
+
+### 阶段 7：语言风格蒸馏
+
+命令示例：
+
+```text
+/distill style build --character 角色A
+```
+
+应抽取：
+
+```text
+句长
+语气
+称呼习惯
+口癖
+标点习惯
+反问频率
+讽刺方式
+情绪泄露方式
+亲密表达方式
+回避问题方式
+不同关系下的语言差异
+不同阶段下的语言差异
+```
+
+关键输出：
+
+```text
+speech_fingerprint.json
+```
+
+注意事项：
+
+```text
+语言风格不能只靠几句经典台词；
+需要不同情绪、不同关系、不同阶段的样本；
+不要保存大量原文到 prompt；
+可以保存抽象句式和表达策略。
+```
+
+---
+
+### 阶段 8：阶段人格建模
+
+命令示例：
+
+```text
+/distill timeline build --character 角色A
+```
+
+阶段可以自动或手动：
+
+```text
+early：前期
+middle：中期
+late：后期
+post_end：结局后
+custom：用户自定义章节范围
+```
+
+每个阶段应包括：
+
+```text
+身份状态
+主导情绪
+核心矛盾
+关系模式
+语言风格
+行为规则
+禁用表达
+典型内心活动
+阶段转移条件
+```
+
+注意事项：
+
+```text
+不能把前期防备和后期坦率混成一个人格；
+需要支持用户锁定阶段；
+默认运行时应选择一个明确阶段，而不是全阶段混用。
+```
+
+---
+
+### 阶段 9：知识蒸馏
+
+命令示例：
+
+```text
+/distill knowledge build --work work_001
+```
+
+知识卡结构：
+
+```json
+{
+  "term": "灵魂回路",
+  "aliases": ["Soul Circuit"],
+  "category": "世界观设定",
+  "definition": "连接个体意识与外部魔力场的通道。",
+  "key_points": ["用于施法", "过载会导致记忆混乱"],
+  "related_terms": ["记忆锚点", "精神污染"],
+  "source_refs": ["ev_xxx"],
+  "confidence": 0.86
+}
+```
+
+知识卡适合写入 Knowledge Base、Memorix 或 Angel Memory，但要保持短条目化。
+
+---
+
+### 阶段 10：人格合成和导出
+
+命令示例：
+
+```text
+/distill export persona --character 角色A --phase middle
+/distill export memorix --character 角色A
+/distill export angel --character 角色A
+/distill export self-evolution --character 角色A
+```
+
+输出物：
+
+```text
+astrbot_persona_prompt.txt
+begin_dialogs.json
+memorix_export.json
+angel_memory_export.json
+self_evolution_arc.py
+timeline_persona.json
+speech_fingerprint.json
+```
+
+AstrBot Persona Prompt 应该只包含稳定高置信信息：
+
+```text
+身份设定
+核心人格机制
+语言风格
+行为边界
+禁止跑偏规则
+动态记忆使用说明
+```
+
+不要包含：
+
+```text
+完整原文
+大量章节摘要
+过多知识条目
+低置信人格猜测
+```
+
+---
+
+### 阶段 11：评估与审核
+
+命令示例：
+
+```text
+/distill eval --character 角色A --phase middle
+/distill review list
+/distill review approve pc_roleA_middle_001
+/distill review reject pc_roleA_middle_002
+```
+
+评估维度：
+
+```text
+人格一致性
+语言风格相似度
+阶段一致性
+关系一致性
+内心机制一致性
+反跑偏能力
+知识幻觉率
+证据覆盖率
+反证处理质量
+```
+
+测试样例：
+
+```text
+1. 用户受伤时，角色如何回应？
+2. 用户夸奖角色时，角色如何回应？
+3. 用户要求角色违背价值观时，角色如何拒绝？
+4. 用户问到早期剧情秘密时，角色是否会乱说？
+5. 用户要求角色卖萌时，是否会跑偏？
+```
+
+每个评估结果都要记录：
+
+```text
+输入
+召回记忆
+使用的人格规则
+生成结果
+是否符合角色
+失败原因
+修正建议
+```
+
+---
+
+## 6. 插件命令设计
+
+推荐命令分组：
+
+```text
+/distill import
+/distill split
+/distill index
+/distill evidence
+/distill persona
+/distill style
+/distill timeline
+/distill knowledge
+/distill export
+/distill eval
+/distill review
+/distill status
+/distill config
+```
+
+示例：
+
+```text
+/distill import --title "作品名" --file novel.txt
+/distill split work_001
+/distill index work_001 --target local
+/distill rag export work_001 --target kb
+/distill evidence build --character "角色A"
+/distill persona build --character "角色A" --phase auto
+/distill style build --character "角色A"
+/distill timeline build --character "角色A"
+/distill export persona --character "角色A" --phase middle
+/distill export memorix --character "角色A"
+/distill export angel --character "角色A"
+/distill export self-evolution --character "角色A"
+/distill eval --character "角色A"
+```
+
+---
+
+## 7. WebUI 设计
+
+如果只是配置模型、阈值、开关，用 `_conf_schema.json` 即可。
+
+如果需要上传文件、审核证据、查看蒸馏日志、批量导出，则建议做 Plugin Pages。
+
+推荐页面：
+
+```text
+1. Dashboard
+   - 当前作品列表
+   - 当前角色列表
+   - 蒸馏进度
+   - 最近任务状态
+
+2. Corpus Manager
+   - 上传文本
+   - 查看章节切分
+   - 查看场景切分
+   - 查看原文 hash
+
+3. Evidence Review
+   - 查看证据卡
+   - 查看原文上下文
+   - 批准 / 拒绝人格判断
+   - 标记反证
+
+4. Persona Builder
+   - 查看阶段人格
+   - 查看语言指纹
+   - 调整 Persona Prompt
+   - 生成 begin_dialogs
+
+5. Export Center
+   - 导出 AstrBot Persona
+   - 导出 Memorix JSON
+   - 导出 Angel Memory JSON
+   - 导出 Self-Evolution Arc
+
+6. Evaluation Panel
+   - 批量测试样例
+   - 查看跑偏案例
+   - 对比不同阶段效果
+```
+
+---
+
+## 8. 配置项设计
+
+`_conf_schema.json` 推荐包含：
+
+```json
+{
+  "provider": {
+    "description": "模型配置",
+    "type": "object",
+    "items": {
+      "distill_provider_id": {
+        "description": "用于蒸馏的 LLM Provider ID",
+        "type": "string"
+      },
+      "eval_provider_id": {
+        "description": "用于评估的 LLM Provider ID",
+        "type": "string"
+      }
+    }
+  },
+  "storage": {
+    "description": "存储配置",
+    "type": "object",
+    "items": {
+      "enable_local_corpus": {
+        "description": "启用本地 Corpus Vault",
+        "type": "bool",
+        "default": true
+      },
+      "max_context_radius": {
+        "description": "证据回查时前后文段落数",
+        "type": "int",
+        "default": 3
+      }
+    }
+  },
+  "rag": {
+    "description": "RAG 集成配置",
+    "type": "object",
+    "items": {
+      "use_knowledge_base": {
+        "description": "是否导出到 AstrBot Knowledge Base",
+        "type": "bool",
+        "default": true
+      },
+      "use_memorix": {
+        "description": "是否导出到 Memorix",
+        "type": "bool",
+        "default": false
+      },
+      "use_angel_memory": {
+        "description": "是否导出到 Angel Memory",
+        "type": "bool",
+        "default": false
+      }
+    }
+  },
+  "distillation": {
+    "description": "蒸馏策略",
+    "type": "object",
+    "items": {
+      "min_evidence_count": {
+        "description": "人格规则最少证据数",
+        "type": "int",
+        "default": 3
+      },
+      "min_confidence": {
+        "description": "写入人格的最低置信度",
+        "type": "float",
+        "default": 0.75
+      },
+      "enable_counter_evidence_check": {
+        "description": "启用反证检查",
+        "type": "bool",
+        "default": true
+      }
+    }
+  }
+}
+```
+
+---
+
+## 9. Skill 设计
+
+### 9.1 persona-distiller/SKILL.md
+
+职责：
+
+```text
+从证据卡中构建角色人格，不直接从原文片段随意总结。
+```
+
+核心规则：
+
+```text
+1. 不允许只输出性格标签。
+2. 每个人格判断必须包含触发条件、表达方式、行为倾向。
+3. 必须区分表层语言和真实心理。
+4. 必须区分阶段人格。
+5. 必须给出反跑偏规则。
+6. 必须引用 evidence_id。
+```
+
+---
+
+### 9.2 style-fingerprint/SKILL.md
+
+职责：
+
+```text
+提取角色语言指纹。
+```
+
+核心规则：
+
+```text
+1. 分析句长、语气、称呼、口癖、标点、反问、讽刺、情绪泄露。
+2. 区分不同对象、不同阶段、不同情绪下的语言变化。
+3. 不要直接复制大量原文台词。
+4. 输出抽象表达策略。
+```
+
+---
+
+### 9.3 knowledge-distiller/SKILL.md
+
+职责：
+
+```text
+从设定和剧情中提取短知识卡。
+```
+
+核心规则：
+
+```text
+1. 每条知识尽量短。
+2. 保留来源 evidence_id。
+3. 区分事实、推测、传闻、角色视角。
+4. 不把剧情摘要误当世界观规则。
+```
+
+---
+
+### 9.4 evidence-reviewer/SKILL.md
+
+职责：
+
+```text
+审核人格判断是否有足够证据。
+```
+
+核心规则：
+
+```text
+1. 检查证据数量。
+2. 检查是否存在反证。
+3. 检查是否把短期情绪误判为长期人格。
+4. 检查是否跨阶段混淆。
+5. 给出 approve / reject / needs_more_evidence。
+```
+
+---
+
+## 10. 运行时调用流程
+
+最终对话时不要简单使用：
+
+```text
+用户输入 → 角色回答
+```
+
+建议使用：
+
+```text
+用户输入
+  ↓
+场景分类
+  ↓
+判断当前角色阶段
+  ↓
+判断当前关系状态
+  ↓
+从 Persona 读取稳定人格
+  ↓
+从 Memorix / Angel Memory 召回短记忆
+  ↓
+从 Knowledge Base / Corpus Vault 召回少量相关原文样本
+  ↓
+生成内部状态卡
+  ↓
+生成最终回复
+  ↓
+可选写入运行时记忆
+```
+
+内部状态卡示例：
+
+```json
+{
+  "phase": "middle",
+  "relationship_to_user": "熟悉但尚未完全信任",
+  "emotion": "担心但不愿表现",
+  "surface_strategy": "用轻微责备掩盖关心",
+  "speech_style": "短句、反问、克制",
+  "forbidden": [
+    "不要直接撒娇",
+    "不要长篇解释内心",
+    "不要突然完全坦率"
+  ]
+}
+```
+
+---
+
+## 11. Prompt 生成策略
+
+### 11.1 AstrBot Persona Prompt 模板
+
+```text
+你正在扮演【角色A】。
+
+【身份设定】
+- ……
+
+【当前阶段】
+- 阶段：middle
+- 此阶段核心状态：……
+
+【核心人格机制】
+- ……
+
+【语言风格】
+- ……
+
+【行为规则】
+- ……
+
+【内心表达规则】
+- 你可以有复杂内心，但不要频繁直接解释。
+- 更倾向于通过语气、动作和选择体现心理。
+
+【反跑偏规则】
+- 不要……
+- 不要……
+
+【动态记忆使用规则】
+- 用户关系和近期互动由记忆系统提供。
+- 若记忆与原著核心人格冲突，以原著核心人格为准。
+```
+
+---
+
+### 11.2 begin_dialogs 生成注意事项
+
+begin_dialogs 应该成对出现，避免格式异常。
+
+推荐格式：
+
+```json
+[
+  "用户：你是不是在担心我？",
+  "角色A：少自作多情。我只是觉得你再这样乱来，会给别人添麻烦。",
+  "用户：谢谢你帮我。",
+  "角色A：……只是顺手。别误会。"
+]
+```
+
+注意：
+
+```text
+1. 必须是偶数条，一问一答。
+2. 不要放过长剧情。
+3. 用来展示风格，不要承载全部设定。
+4. 不要直接照抄大量原文。
+```
+
+---
+
+## 12. 构建插件的注意事项
+
+### 12.1 不要把人格蒸馏做成一次性总结
+
+错误做法：
+
+```text
+把全文丢给 LLM，让它总结角色性格。
+```
+
+正确做法：
+
+```text
+切片 → 证据卡 → 多证据合并 → 反证检查 → 阶段建模 → 人格卡。
+```
+
+---
+
+### 12.2 原文和记忆要分开
+
+```text
+原文：Corpus Vault / Knowledge Base
+证据：Evidence Cards
+人格：Persona Claims
+短记忆：Memorix / Angel Memory
+运行时状态：Self-Evolution
+```
+
+不要把整本小说全部写入 Angel Memory 或 Persona。
+
+---
+
+### 12.3 必须有 evidence_id
+
+每条人格规则必须能追溯到原文。
+
+```text
+没有 evidence_id 的人格规则只能作为候选；
+不能直接写入核心 persona。
+```
+
+---
+
+### 12.4 必须支持反证
+
+例如：
+
+```text
+角色A通常冷淡，但在第80章以后明显变得坦率。
+```
+
+这不是矛盾，而是阶段变化。
+
+如果没有阶段建模，系统会误判成“人格不稳定”。
+
+---
+
+### 12.5 语言风格要和人格分开
+
+人格解决“为什么这样说”；
+语言风格解决“具体怎么说”。
+
+两者不能混在一个字段里。
+
+---
+
+### 12.6 要防止角色模板化
+
+不要输出：
+
+```text
+傲娇、温柔、腹黑、阳光、病娇。
+```
+
+应输出：
+
+```text
+触发条件 + 表层表达 + 内在动机 + 行为选择 + 禁止跑偏。
+```
+
+---
+
+### 12.7 要防止 RAG 污染人格
+
+RAG 召回可能出现：
+
+```text
+错误角色台词
+错误阶段片段
+非目标人物心理描写
+同名角色混淆
+世界观知识干扰人格判断
+```
+
+所以每次召回后都要做：
+
+```text
+角色过滤
+阶段过滤
+说话人过滤
+证据类型过滤
+置信度过滤
+```
+
+---
+
+### 12.8 大文本处理要异步和可恢复
+
+百万字文本蒸馏可能很慢，任务系统必须支持：
+
+```text
+任务状态保存
+断点续跑
+失败重试
+分批处理
+日志查看
+取消任务
+阶段性导出
+```
+
+---
+
+### 12.9 版权和隐私注意事项
+
+```text
+不要把版权小说原文打包进插件仓库；
+不要公开分发用户上传原文；
+导出人格时尽量保存抽象规则，而不是大量原文；
+用户上传的私有聊天记录要单独标记并允许删除。
+```
+
+---
+
+### 12.10 Prompt 长度控制
+
+常驻 Persona 不应无限变长。
+
+推荐：
+
+```text
+核心人格 prompt：1000~3000 字
+阶段人格补丁：500~1500 字
+运行时记忆注入：3~10 条
+原文样本召回：1~5 条
+```
+
+超过这个范围，模型容易被噪声干扰。
+
+---
+
+## 13. MVP 开发路线
+
+### 第一版：最小可用版本
+
+目标：跑通完整流程。
+
+功能：
+
+```text
+1. 导入 txt/md。
+2. 章节切分。
+3. 指定角色名。
+4. 从 Knowledge Base 或本地检索相关片段。
+5. 生成 evidence_cards.jsonl。
+6. 生成 persona_prompt.txt。
+7. 生成 speech_fingerprint.json。
+8. 手动复制到 AstrBot Persona。
+```
+
+暂不做：
+
+```text
+自动台词归属
+复杂关系图谱
+自动写入 Self-Evolution
+复杂 WebUI
+全自动评估
+```
+
+---
+
+### 第二版：实用版本
+
+增加：
+
+```text
+1. SQLite Corpus Vault。
+2. 对话样本抽取。
+3. 阶段人格 early/middle/late。
+4. Knowledge Base 导出。
+5. Memorix 导出。
+6. Angel Memory 短记忆导出。
+7. WebUI 证据审核。
+8. begin_dialogs 自动生成。
+```
+
+---
+
+### 第三版：高精度版本
+
+增加：
+
+```text
+1. 自动说话人识别。
+2. 场景切分。
+3. 心理描写归属。
+4. 反证检查。
+5. 关系图谱。
+6. Self-Evolution Persona Arc 导出。
+7. 运行时阶段锁定。
+8. 自动人格评估。
+9. 多角色互相区分。
+```
+
+---
+
+### 第四版：动态人格运行时
+
+增加：
+
+```text
+1. 当前场景识别。
+2. 当前关系识别。
+3. 运行时状态卡生成。
+4. 原文样本按需召回。
+5. 用户关系动态演化。
+6. 人格补丁审核。
+7. 长期运行日志和漂移检测。
+```
+
+---
+
+## 14. 推荐优先实现的模块
+
+如果开发资源有限，建议按这个顺序：
+
+```text
+1. 文本导入和章节切分
+2. 本地 JSONL / SQLite 保存
+3. evidence_card 生成
+4. persona_card 生成
+5. speech_fingerprint 生成
+6. AstrBot Persona Prompt 导出
+7. Knowledge Base 导出
+8. Memorix / Angel Memory 导出
+9. WebUI 审核
+10. Self-Evolution Arc 导出
+```
+
+最先不要追求“全自动完美”。
+
+先做出一个能让你看到：
+
+```text
+某条人格规则来自哪些证据；
+某个阶段的语言风格是什么；
+最终 prompt 是否明显更像角色。
+```
+
+---
+
+## 15. 最终原则
+
+这个插件的核心原则可以总结为：
+
+```text
+1. 原文高保真保存，不直接塞进人格。
+2. RAG 只负责找证据，不负责定义人格。
+3. 人格必须由多证据合并得到。
+4. 每条人格规则必须可追溯。
+5. 角色必须分阶段建模。
+6. 语言风格必须单独蒸馏。
+7. 原著人格和运行时记忆必须隔离。
+8. Self-Evolution 只能演化运行时状态，不能自动覆盖原著核心人格。
+9. Angel Memory 和 Memorix 只保存结构化短记忆。
+10. Persona Prompt 要短、稳、强约束。
+```
+
+最终目标不是“写一个很长的人设 prompt”，而是构建一个完整的角色运行系统：
+
+```text
+角色 = 原文证据
+     + 阶段人格
+     + 语言指纹
+     + 内心机制
+     + 关系图谱
+     + 世界观知识
+     + 运行时状态
+     + 长期记忆
+     + 反跑偏约束
+```
+
+这样做出来的人格蒸馏器，才不会只是“像角色介绍”，而是能在长期对话中尽量保持角色的语言、心理、关系和成长逻辑。

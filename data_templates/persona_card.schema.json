@@ -1,0 +1,19 @@
+{
+  "type": "object",
+  "required": ["character", "phase", "deep_mechanism", "evidence_ids", "confidence"],
+  "properties": {
+    "work_id": {"type": "string"},
+    "character": {"type": "string"},
+    "phase": {"type": "string"},
+    "surface_trait": {"type": "string"},
+    "deep_mechanism": {"type": "string"},
+    "trigger_conditions": {"type": "array"},
+    "expression_patterns": {"type": "array"},
+    "behavior_rules": {"type": "array"},
+    "anti_drift_rules": {"type": "array"},
+    "evidence_ids": {"type": "array"},
+    "counter_evidence_ids": {"type": "array"},
+    "confidence": {"type": "number"},
+    "status": {"type": "string"}
+  }
+}

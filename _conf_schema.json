@@ -1,0 +1,76 @@
+{
+  "provider": {
+    "description": "模型配置（当前 MVP 先使用本地启发式流程，后续可接入 LLM Provider）",
+    "type": "object",
+    "items": {
+      "distill_provider_id": {
+        "description": "用于蒸馏的 LLM Provider ID（预留）",
+        "type": "string",
+        "default": ""
+      },
+      "eval_provider_id": {
+        "description": "用于评估的 LLM Provider ID（预留）",
+        "type": "string",
+        "default": ""
+      }
+    }
+  },
+  "storage": {
+    "description": "存储配置",
+    "type": "object",
+    "items": {
+      "enable_local_corpus": {
+        "description": "启用本地 Corpus Vault",
+        "type": "bool",
+        "default": true
+      },
+      "max_context_radius": {
+        "description": "证据回查时前后文段落数",
+        "type": "int",
+        "default": 3
+      }
+    }
+  },
+  "rag": {
+    "description": "RAG 集成配置",
+    "type": "object",
+    "items": {
+      "use_knowledge_base": {
+        "description": "是否导出 Knowledge Base Markdown chunk",
+        "type": "bool",
+        "default": true
+      },
+      "use_memorix": {
+        "description": "是否导出 Memorix JSON",
+        "type": "bool",
+        "default": false
+      },
+      "use_angel_memory": {
+        "description": "是否导出 Angel Memory JSON",
+        "type": "bool",
+        "default": false
+      }
+    }
+  },
+  "distillation": {
+    "description": "蒸馏策略",
+    "type": "object",
+    "items": {
+      "min_evidence_count": {
+        "description": "人格规则最少证据数",
+        "type": "int",
+        "default": 3
+      },
+      "min_confidence": {
+        "description": "写入人格的最低置信度",
+        "type": "float",
+        "default": 0.75
+      },
+      "enable_counter_evidence_check": {
+        "description": "启用反证检查",
+        "type": "bool",
+        "default": true
+      }
+    }
+  }
+}

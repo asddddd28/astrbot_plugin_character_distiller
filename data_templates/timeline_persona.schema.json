@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "required": ["character", "versions"],
+  "properties": {
+    "character": {"type": "string"},
+    "versions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["phase", "dominant_state", "core_conflict", "persona_claim_refs"],
+        "properties": {
+          "phase": {"type": "string"},
+          "chapter_range": {"type": "string"},
+          "dominant_state": {"type": "string"},
+          "core_conflict": {"type": "string"},
+          "speech_style_ref": {"type": "string"},
+          "persona_claim_refs": {"type": "array"}
+        }
+      }
+    }
+  }
+}

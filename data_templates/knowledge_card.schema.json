@@ -1,0 +1,14 @@
+{
+  "type": "object",
+  "required": ["term", "category", "definition", "source_refs", "confidence"],
+  "properties": {
+    "term": {"type": "string"},
+    "aliases": {"type": "array"},
+    "category": {"type": "string"},
+    "definition": {"type": "string"},
+    "key_points": {"type": "array"},
+    "related_terms": {"type": "array"},
+    "source_refs": {"type": "array"},
+    "confidence": {"type": "number"}
+  }
+}
