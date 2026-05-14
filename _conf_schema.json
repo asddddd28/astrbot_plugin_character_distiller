@@ -4,17 +4,17 @@
     "type": "object",
     "items": {
       "enable_ai_distillation": {
-        "description": "启用 AstrBot LLM Provider 进行 AI 提取和蒸馏；关闭后使用纯规则模式",
+        "description": "启用 AstrBot LLM Provider 进行 AI 提取和蒸馏；关闭后使用纯规则模式。",
         "type": "bool",
         "default": true
       },
       "distill_provider_id": {
-        "description": "用于蒸馏的 LLM Provider ID；留空时使用当前会话正在使用的聊天模型",
+        "description": "用于蒸馏的 LLM Provider ID；留空时使用当前会话正在使用的聊天模型。",
         "type": "string",
         "default": ""
       },
       "eval_provider_id": {
-        "description": "用于评估的 LLM Provider ID（预留）",
+        "description": "用于评估的 LLM Provider ID（预留）。",
         "type": "string",
         "default": ""
       }
@@ -25,12 +25,12 @@
     "type": "object",
     "items": {
       "enable_local_corpus": {
-        "description": "启用本地 Corpus Vault",
+        "description": "启用本地 Corpus Vault。",
         "type": "bool",
         "default": true
       },
       "max_context_radius": {
-        "description": "证据回查时前后文段落数",
+        "description": "证据回查时前后文段落数。",
         "type": "int",
         "default": 3
       }
@@ -41,17 +41,17 @@
     "type": "object",
     "items": {
       "use_knowledge_base": {
-        "description": "是否导出 Knowledge Base Markdown chunk",
+        "description": "是否导出 Knowledge Base Markdown chunk。",
         "type": "bool",
         "default": true
       },
       "use_memorix": {
-        "description": "是否导出 Memorix JSON",
+        "description": "是否导出 Memorix JSON。",
         "type": "bool",
         "default": false
       },
       "use_angel_memory": {
-        "description": "是否导出 Angel Memory JSON",
+        "description": "是否导出 Angel Memory JSON。",
         "type": "bool",
         "default": false
       }
@@ -62,22 +62,22 @@
     "type": "object",
     "items": {
       "min_evidence_count": {
-        "description": "人格规则最少证据数",
+        "description": "人格规则最少证据数。",
         "type": "int",
         "default": 3
       },
       "min_confidence": {
-        "description": "写入人格的最低置信度",
+        "description": "写入人格的最低置信度。",
         "type": "float",
         "default": 0.75
       },
       "enable_counter_evidence_check": {
-        "description": "启用反证检查",
+        "description": "启用反证检查。",
         "type": "bool",
         "default": true
       },
       "ai_max_evidence": {
-        "description": "每次 AI 提取/蒸馏最多送入模型的候选证据段落数",
+        "description": "每次 AI 提取/蒸馏最多送入模型的候选证据段落数。",
         "type": "int",
         "default": 48
       }
